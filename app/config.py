@@ -18,6 +18,8 @@ class Location(BaseModel):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
     timezone: str = "UTC"
+    #: 5 digit INE municipality code used by AEMET (Spanish locations only)
+    aemet_municipality: Optional[str] = Field(default=None, pattern=r"^[0-9]{5}$")
 
 
 DEFAULT_LOCATIONS: List[Location] = [
@@ -34,6 +36,8 @@ DEFAULT_LOCATIONS: List[Location] = [
         latitude=39.5386,
         longitude=3.3319,
         timezone="Europe/Madrid",
+        # Porto Cristo belongs to the municipality of Manacor
+        aemet_municipality="07033",
     ),
 ]
 
@@ -55,6 +59,9 @@ class Settings(BaseSettings):
     forecast_days: int = 7
     #: how long a forecast is served from memory before it is refetched
     cache_ttl_seconds: int = 1800
+    #: ``watering_recommended`` turns on when rain minus evapotranspiration of
+    #: today and the next two days is below ``-watering_deficit_mm``
+    watering_deficit_mm: float = Field(default=5.0, ge=0)
 
     # --- locations -----------------------------------------------------
     locations: List[Location] = Field(default_factory=lambda: list(DEFAULT_LOCATIONS))
@@ -62,6 +69,7 @@ class Settings(BaseSettings):
     # --- provider credentials (optional, free registration) ------------
     openweathermap_api_key: Optional[str] = None
     weatherapi_api_key: Optional[str] = None
+    aemet_api_key: Optional[str] = None
     user_agent: str = "ha_weather/1.0 (https://github.com/bjoernhoefer/ha_weather)"
 
     # --- Azure AI Foundry verification ---------------------------------

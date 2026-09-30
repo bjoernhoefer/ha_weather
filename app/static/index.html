@@ -53,6 +53,32 @@
     </section>
 
     <section>
+      <h2>Source control</h2>
+      <p class="muted">
+        Switch weather sources on or off for all locations. Sources without an
+        API key can be added as any keyless Open-Meteo weather model. API keys
+        entered here are stored on the server, override the environment
+        variables and are never shown again.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Source</th><th>Description</th><th>Type</th><th>Model</th>
+            <th>API key</th><th>Active</th><th>Enabled</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="sources"></tbody>
+      </table>
+      <form id="addSource" class="bar" style="margin-top: .8rem">
+        <label>Id <input id="sourceName" required pattern="[a-z0-9_]{2,40}" placeholder="e.g. icon_d2" /></label>
+        <label>Open-Meteo model <input id="sourceModel" required pattern="[a-z0-9_]{2,64}" list="modelCatalog" placeholder="e.g. icon_d2" /></label>
+        <datalist id="modelCatalog"></datalist>
+        <label>Description <input id="sourceDescription" maxlength="200" placeholder="optional" /></label>
+        <button type="submit">Add source</button>
+      </form>
+    </section>
+
+    <section>
       <h2>Season &amp; weather change</h2>
       <table><tbody id="season"></tbody></table>
     </section>
@@ -61,7 +87,7 @@
       <h2>Consensus forecast</h2>
       <table>
         <thead>
-          <tr><th>Date</th><th>Min &deg;C</th><th>Max &deg;C</th><th>Precip mm</th><th>Wind</th><th>Condition</th><th>Providers</th></tr>
+          <tr><th>Date</th><th>Min &deg;C</th><th>Max &deg;C</th><th>Precip mm</th><th>Wind</th><th>Condition</th><th>Providers</th><th>ET0 mm</th><th>Water balance mm</th><th>Sunshine h</th><th>Radiation MJ/m&sup2;</th><th>Soil moisture m&sup3;/m&sup3;</th></tr>
         </thead>
         <tbody id="forecast"></tbody>
       </table>
@@ -181,9 +207,133 @@
           cell(row, day.wind_speed_max);
           cell(row, day.condition);
           cell(row, day.provider_count);
+          cell(row, day.evapotranspiration_mm);
+          cell(row, day.water_balance_mm);
+          cell(row, day.sunshine_hours);
+          cell(row, day.radiation_mj_m2);
+          cell(row, day.soil_moisture);
           body.appendChild(row);
         });
       }
+
+      const KEY_ORIGINS = { ui: "set in web UI", environment: "from environment" };
+
+      function apiKeyEditor(source) {
+        const box = document.createElement("div");
+        box.className = "bar";
+        const state = document.createElement("span");
+        state.textContent = KEY_ORIGINS[source.api_key_origin] || "missing";
+        const input = document.createElement("input");
+        input.type = "password";
+        input.autocomplete = "off";
+        input.placeholder = source.api_key_origin ? "new key" : "API key";
+        input.setAttribute("aria-label", `API key for ${source.name}`);
+        const save = document.createElement("button");
+        save.textContent = "Save key";
+        save.addEventListener("click", async () => {
+          if (!input.value.trim()) { setStatus("Please enter an API key."); return; }
+          try {
+            renderSources(await api(`/api/sources/${source.name}/api-key`, {
+              method: "PUT",
+              body: JSON.stringify({ api_key: input.value.trim() }),
+            }));
+            setStatus(`API key for ${source.name} saved.`);
+            await load(true);
+          } catch (error) { setStatus(error.message); }
+        });
+        box.append(state, input, save);
+        if (source.api_key_origin === "ui") {
+          const remove = document.createElement("button");
+          remove.textContent = "Remove key";
+          remove.addEventListener("click", async () => {
+            if (!confirm(`Remove the API key for ${source.name}?`)) return;
+            try {
+              renderSources(await api(`/api/sources/${source.name}/api-key`, { method: "DELETE" }));
+              setStatus(`API key for ${source.name} removed.`);
+              await load();
+            } catch (error) { setStatus(error.message); }
+          });
+          box.appendChild(remove);
+        }
+        return box;
+      }
+
+      function renderSources(sources) {
+        const body = $("sources");
+        body.textContent = "";
+        sources.forEach((source) => {
+          const row = document.createElement("tr");
+          cell(row, source.name);
+          cell(row, source.description);
+          cell(row, source.custom ? "custom" : "built-in");
+          cell(row, source.model);
+          cell(row, source.requires_api_key ? apiKeyEditor(source) : "not required");
+          cell(row, source.available ? "yes" : "no");
+
+          const enabled = document.createElement("input");
+          enabled.type = "checkbox";
+          enabled.checked = source.enabled;
+          enabled.setAttribute("aria-label", `Enable source ${source.name}`);
+          enabled.addEventListener("change", async () => {
+            try {
+              renderSources(await api(`/api/sources/${source.name}`, {
+                method: "PUT",
+                body: JSON.stringify({ enabled: enabled.checked }),
+              }));
+              setStatus(`Source ${source.name} ${enabled.checked ? "enabled" : "disabled"}.`);
+              await load();
+            } catch (error) { setStatus(error.message); }
+          });
+          cell(row, enabled);
+
+          const actions = document.createElement("td");
+          if (source.custom) {
+            const remove = document.createElement("button");
+            remove.textContent = "Delete";
+            remove.addEventListener("click", async () => {
+              if (!confirm(`Delete custom source ${source.name}?`)) return;
+              try {
+                renderSources(await api(`/api/sources/${source.name}`, { method: "DELETE" }));
+                setStatus(`Deleted source ${source.name}.`);
+                await load();
+              } catch (error) { setStatus(error.message); }
+            });
+            actions.appendChild(remove);
+          }
+          row.appendChild(actions);
+          body.appendChild(row);
+        });
+      }
+
+      async function loadSources() {
+        try {
+          renderSources(await api("/api/sources"));
+          const catalog = await api("/api/sources/catalog");
+          const list = $("modelCatalog");
+          list.textContent = "";
+          catalog.forEach((entry) => {
+            const option = document.createElement("option");
+            option.value = entry.model;
+            option.label = entry.description;
+            list.appendChild(option);
+          });
+        } catch (error) { setStatus(error.message); }
+      }
+
+      $("addSource").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        try {
+          const payload = {
+            name: $("sourceName").value.trim(),
+            model: $("sourceModel").value.trim(),
+            description: $("sourceDescription").value.trim(),
+          };
+          renderSources(await api("/api/sources", { method: "POST", body: JSON.stringify(payload) }));
+          setStatus(`Added source ${payload.name}.`);
+          $("addSource").reset();
+          await load(true);
+        } catch (error) { setStatus(error.message); }
+      });
 
       async function load(refresh = false) {
         const locationId = $("location").value;
@@ -211,6 +361,7 @@
             option.textContent = location.name;
             select.appendChild(option);
           });
+          await loadSources();
           await load();
         } catch (error) { setStatus(error.message); }
       }

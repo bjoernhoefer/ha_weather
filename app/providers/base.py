@@ -24,12 +24,18 @@ class WeatherProvider(abc.ABC):
     description: str = ""
     #: ``True`` when the source needs a (free) registration
     requires_api_key: bool = False
+    #: name of the :class:`Settings` field holding the key (UI editable)
+    api_key_setting: Optional[str] = None
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
     def is_available(self) -> bool:
         """Providers without their (optional) credentials are skipped."""
+        return True
+
+    def supports(self, location: Location) -> bool:
+        """Regional sources only cover some locations."""
         return True
 
     @abc.abstractmethod

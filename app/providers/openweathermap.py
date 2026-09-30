@@ -62,6 +62,7 @@ class OpenWeatherMapProvider(WeatherProvider):
     name = "openweathermap"
     description = "OpenWeatherMap 5 day forecast (free registration required)"
     requires_api_key = True
+    api_key_setting = "openweathermap_api_key"
     url = "https://api.openweathermap.org/data/2.5/forecast"
 
     def is_available(self) -> bool:

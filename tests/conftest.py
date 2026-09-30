@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta, timezone
 from typing import List
 
@@ -19,6 +20,15 @@ VIENNA = Location(
     latitude=48.2085,
     longitude=16.3721,
     timezone="Europe/Vienna",
+)
+
+PORTO_CRISTO = Location(
+    id="porto_cristo",
+    name="Porto Cristo",
+    latitude=39.5386,
+    longitude=3.3319,
+    timezone="Europe/Madrid",
+    aemet_municipality="07033",
 )
 
 
@@ -66,6 +76,114 @@ def met_no_payload(start: date, count: int = 3) -> dict:
     return {"properties": {"timeseries": series}}
 
 
+def geosphere_payload(start: date, hours: int = 60) -> dict:
+    """Hourly C-LAEF series starting at local midnight of ``start`` (UTC)."""
+    first = datetime(start.year, start.month, start.day, tzinfo=timezone.utc)
+    stamps = [
+        (first + timedelta(hours=index)).isoformat(timespec="minutes")
+        for index in range(hours)
+    ]
+
+    def data(values):
+        return {"name": "x", "unit": "x", "data": values}
+
+    return {
+        "media_type": "application/json",
+        "type": "FeatureCollection",
+        "version": "v1",
+        "reference_time": stamps[0],
+        "timestamps": stamps,
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [16.37, 48.2]},
+                "properties": {
+                    "parameters": {
+                        "2t": data([10.0 + (index % 24) / 2 for index in range(hours)]),
+                        "rain": data([0.25 for _ in range(hours)]),
+                        "sf": data([0.0 for _ in range(hours)]),
+                        "10u": data([3.0 for _ in range(hours)]),
+                        "10v": data([4.0 for _ in range(hours)]),
+                        "tcc": data([0.1 for _ in range(hours)]),
+                    }
+                },
+            }
+        ],
+    }
+
+
+def aemet_daily_payload(start: date, count: int = 3) -> list:
+    days = []
+    for index in range(count):
+        target = start + timedelta(days=index)
+        days.append(
+            {
+                "fecha": f"{target.isoformat()}T00:00:00",
+                "temperatura": {"maxima": 26 + index, "minima": 17 + index},
+                "estadoCielo": [
+                    {"value": "", "periodo": "00-24", "descripcion": ""},
+                    {"value": "12", "periodo": "12-24", "descripcion": "Poco nuboso"},
+                ],
+                "viento": [
+                    {"direccion": "N", "velocidad": 10, "periodo": "00-12"},
+                    {"direccion": "NE", "velocidad": 20, "periodo": "12-24"},
+                ],
+                "probPrecipitacion": [{"value": 10, "periodo": "00-24"}],
+            }
+        )
+    return [
+        {
+            "origen": {"productor": "Agencia Estatal de Meteorología - AEMET"},
+            "nombre": "Manacor",
+            "prediccion": {"dia": days},
+        }
+    ]
+
+
+def aemet_hourly_payload(start: date) -> list:
+    return [
+        {
+            "nombre": "Manacor",
+            "prediccion": {
+                "dia": [
+                    {
+                        "fecha": f"{start.isoformat()}T00:00:00",
+                        "precipitacion": [
+                            {"value": "Ip" if hour == 0 else "0.5", "periodo": f"{hour:02d}"}
+                            for hour in range(24)
+                        ],
+                    },
+                    {
+                        "fecha": f"{(start + timedelta(days=1)).isoformat()}T00:00:00",
+                        "precipitacion": [{"value": "3", "periodo": "00"}],
+                    },
+                ]
+            },
+        }
+    ]
+
+
+def agro_payload(start: date, count: int = 7) -> dict:
+    return {
+        "daily": {
+            "time": _dates(start, count),
+            "et0_fao_evapotranspiration": [4.0 for _ in range(count)],
+            "sunshine_duration": [36000.0 for _ in range(count)],
+            "shortwave_radiation_sum": [20.5 for _ in range(count)],
+        }
+    }
+
+
+def soil_payload(start: date, count: int = 2) -> dict:
+    times, values = [], []
+    for index in range(count):
+        day = start + timedelta(days=index)
+        for hour in range(24):
+            times.append(f"{day.isoformat()}T{hour:02d}:00")
+            values.append(0.2 if hour < 12 else 0.3)
+    return {"hourly": {"time": times, "soil_moisture_3_to_9cm": values}}
+
+
 def mock_transport(today: date) -> httpx.MockTransport:
     """Answer every outgoing request with a deterministic payload."""
 
@@ -76,9 +194,41 @@ def mock_transport(today: date) -> httpx.MockTransport:
             return httpx.Response(200, json=met_no_payload(today))
         if host == "api.openweathermap.org":
             return httpx.Response(404, json={"message": "no api key"})
+        if host == "dataset.api.hub.geosphere.at":
+            return httpx.Response(200, json=geosphere_payload(today))
+        if host == "opendata.aemet.es":
+            path = request.url.path
+            if path.startswith("/opendata/sh/"):
+                body = (
+                    aemet_daily_payload(today)
+                    if path.endswith("/diaria")
+                    else aemet_hourly_payload(today)
+                )
+                return httpx.Response(
+                    200,
+                    content=json.dumps(body, ensure_ascii=False).encode("iso-8859-15"),
+                    headers={"Content-Type": "application/json;charset=ISO-8859-15"},
+                )
+            if request.headers.get("api_key") != "aemet-key":
+                return httpx.Response(
+                    401, json={"estado": 401, "descripcion": "API key invalido"}
+                )
+            kind = "diaria" if "/diaria/" in path else "horaria"
+            return httpx.Response(
+                200,
+                json={
+                    "estado": 200,
+                    "descripcion": "exito",
+                    "datos": f"https://opendata.aemet.es/opendata/sh/abc/{kind}",
+                },
+            )
         if host == "api.weatherapi.com":
             return httpx.Response(404, json={"error": "no api key"})
         if host == "api.open-meteo.com":
+            if "et0_fao_evapotranspiration" in request.url.params.get("daily", ""):
+                return httpx.Response(200, json=agro_payload(today))
+            if "hourly" in request.url.params:
+                return httpx.Response(200, json=soil_payload(today))
             if "past_days" in request.url.params:
                 return httpx.Response(
                     200, json=open_meteo_payload(today - timedelta(days=5), 6)

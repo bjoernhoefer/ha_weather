@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import httpx
 import pytest
@@ -13,7 +13,16 @@ from app.providers.open_meteo import parse_open_meteo_daily
 from app.providers.openweathermap import parse_openweathermap
 from app.providers.weatherapi import parse_weatherapi
 
-from .conftest import VIENNA, met_no_payload, open_meteo_payload
+from .conftest import (
+    PORTO_CRISTO,
+    VIENNA,
+    aemet_daily_payload,
+    aemet_hourly_payload,
+    geosphere_payload,
+    met_no_payload,
+    mock_transport,
+    open_meteo_payload,
+)
 
 
 def test_open_meteo_parsing(today):
@@ -142,3 +151,137 @@ async def test_provider_failure_is_captured(settings):
         result = await provider.fetch(client, VIENNA)
     assert not result.ok
     assert "500" in (result.error or "")
+
+
+async def test_open_meteo_model_provider_sends_models_parameter(today):
+    from app.providers.open_meteo import OpenMeteoModelProvider
+
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(request.url.params)
+        seen["host"] = request.url.host
+        return httpx.Response(200, json=open_meteo_payload(today, 3))
+
+    provider = OpenMeteoModelProvider(Settings(), "custom_icon", "icon_d2")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await provider.fetch(client, VIENNA)
+    assert result.ok
+    assert result.provider == "custom_icon"
+    assert seen["models"] == "icon_d2"
+    assert seen["host"] == "api.open-meteo.com"
+
+
+def test_open_meteo_model_provider_rejects_invalid_models():
+    from app.providers.open_meteo import OpenMeteoModelProvider
+
+    with pytest.raises(ValueError):
+        OpenMeteoModelProvider(Settings(), "x", "icon_d2&foo=bar")
+
+
+def test_geosphere_parsing_builds_complete_local_days(today):
+    from app.providers.geosphere import parse_geosphere
+
+    days = parse_geosphere(geosphere_payload(today, 60), "UTC")
+    # 60 hourly values -> two complete days, the 12 h tail is dropped
+    assert [day.target_date for day in days] == [today, today + timedelta(days=1)]
+    first = days[0]
+    assert first.temperature_min == 10.0
+    assert first.temperature_max == 21.5
+    # hourly sums are attributed to the hour before the time stamp:
+    # 01:00..23:00 plus 00:00 of the next day = 24 hours
+    assert first.precipitation_mm == pytest.approx(24 * 0.25)
+    assert first.wind_speed_max == pytest.approx(18.0)  # 5 m/s
+    assert first.condition == "rainy"
+
+
+def test_geosphere_condition_from_cloud_cover(today):
+    from app.providers.geosphere import parse_geosphere
+
+    payload = geosphere_payload(today, 48)
+    parameters = payload["features"][0]["properties"]["parameters"]
+    parameters["rain"]["data"] = [0.0] * 48
+    parameters["tcc"]["data"] = [0.9] * 48
+    assert parse_geosphere(payload, "UTC")[0].condition == "cloudy"
+    parameters["sf"]["data"] = [0.5] * 48
+    assert parse_geosphere(payload, "UTC")[0].condition == "snowy"
+
+
+def test_geosphere_only_covers_the_alpine_domain():
+    from app.providers.geosphere import GeoSphereProvider
+
+    provider = GeoSphereProvider(Settings())
+    assert provider.supports(VIENNA) is True
+    assert provider.supports(PORTO_CRISTO) is False
+
+
+def test_aemet_condition_codes():
+    from app.providers.aemet import condition_from_aemet
+
+    assert condition_from_aemet("11") == "clear"
+    assert condition_from_aemet("11n") == "clear"
+    assert condition_from_aemet("14") == "cloudy"
+    assert condition_from_aemet("46") == "rainy"
+    assert condition_from_aemet("62n") == "lightning-rainy"
+    assert condition_from_aemet("36") == "snowy"
+    assert condition_from_aemet("81") == "fog"
+    assert condition_from_aemet(None) is None
+
+
+def test_aemet_parsing(today):
+    from app.providers.aemet import parse_aemet_daily, parse_aemet_hourly_precipitation
+
+    precipitation = parse_aemet_hourly_precipitation(aemet_hourly_payload(today))
+    # "Ip" (trace) counts as 0, the incomplete second day is ignored
+    assert precipitation == {today: pytest.approx(23 * 0.5)}
+    days = parse_aemet_daily(aemet_daily_payload(today), precipitation)
+    assert len(days) == 3
+    assert days[0].temperature_max == 26
+    assert days[0].temperature_min == 17
+    assert days[0].wind_speed_max == 20
+    assert days[0].condition == "partlycloudy"
+    assert days[0].precipitation_mm == pytest.approx(11.5)
+    assert days[1].precipitation_mm is None
+
+
+async def test_aemet_provider_two_step_request(today):
+    from app.providers.aemet import AemetProvider
+
+    provider = AemetProvider(Settings(aemet_api_key="aemet-key"))
+    assert provider.is_available()
+    assert provider.supports(PORTO_CRISTO) and not provider.supports(VIENNA)
+    async with httpx.AsyncClient(transport=mock_transport(today)) as client:
+        result = await provider.fetch(client, PORTO_CRISTO)
+    assert result.ok, result.error
+    assert result.days[0].precipitation_mm == pytest.approx(11.5)
+
+
+async def test_aemet_provider_reports_invalid_key(today):
+    from app.providers.aemet import AemetProvider
+
+    provider = AemetProvider(Settings(aemet_api_key="wrong"))
+    async with httpx.AsyncClient(transport=mock_transport(today)) as client:
+        result = await provider.fetch(client, PORTO_CRISTO)
+    assert not result.ok
+    assert "wrong" not in (result.error or "")
+
+
+async def test_aemet_rejects_foreign_data_links(today):
+    from app.providers.aemet import AemetProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"estado": 200, "datos": "https://evil.example.com/data"}
+        )
+
+    provider = AemetProvider(Settings(aemet_api_key="aemet-key"))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await provider.fetch(client, PORTO_CRISTO)
+    assert not result.ok
+    assert "unexpected AEMET data link" in result.error
+
+
+def test_aemet_is_skipped_without_key():
+    from app.providers.aemet import AemetProvider
+
+    assert AemetProvider(Settings()).is_available() is False

@@ -86,3 +86,50 @@ async def test_home_assistant_state(service):
     assert state["top_provider"]
     assert isinstance(state["upcoming_weather_change"], bool)
     assert len(state["forecast"]) >= 1
+
+
+async def test_regional_sources_only_run_where_they_cover_the_location(
+    tmp_path, client_factory
+):
+    from app.service import WeatherService
+    from app.storage import Storage
+
+    from .conftest import PORTO_CRISTO, VIENNA
+
+    settings = Settings(
+        database_path=str(tmp_path / "regional.sqlite3"),
+        locations=[VIENNA, PORTO_CRISTO],
+        aemet_api_key="aemet-key",
+    )
+    storage = Storage(settings.database_path)
+    try:
+        service = WeatherService(settings, storage, client_factory=client_factory)
+
+        vienna = await service.refresh("vienna")
+        vienna_providers = {item.provider: item for item in vienna.providers}
+        assert "geosphere" in vienna_providers and vienna_providers["geosphere"].ok
+        assert "aemet" not in vienna_providers
+        ranked = {e.provider for e in vienna.ranking.top + vienna.ranking.low}
+        assert "aemet" not in ranked and "geosphere" in ranked
+
+        porto = await service.refresh("porto_cristo")
+        porto_providers = {item.provider: item for item in porto.providers}
+        assert "aemet" in porto_providers and porto_providers["aemet"].ok
+        assert "geosphere" not in porto_providers
+        ranked = {e.provider for e in porto.ranking.top + porto.ranking.low}
+        assert "geosphere" not in ranked and "aemet" in ranked
+    finally:
+        storage.close()
+
+
+def test_default_porto_cristo_uses_the_manacor_aemet_municipality():
+    porto = Settings().location("porto_cristo")
+    assert porto.aemet_municipality == "07033"
+
+
+def test_invalid_aemet_municipality_is_rejected():
+    with pytest.raises(ValueError):
+        Settings(
+            locations='[{"id":"x","name":"X","latitude":1,"longitude":2,'
+            '"aemet_municipality":"../x"}]'
+        )

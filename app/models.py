@@ -100,6 +100,12 @@ class AggregatedDay(BaseModel):
     wind_speed_max: Optional[float] = None
     condition: Optional[str] = None
     provider_count: int = 0
+    # garden/energy indicators (Open-Meteo, not part of the consensus)
+    evapotranspiration_mm: Optional[float] = None
+    water_balance_mm: Optional[float] = None
+    sunshine_hours: Optional[float] = None
+    radiation_mj_m2: Optional[float] = None
+    soil_moisture: Optional[float] = None
 
 
 class LocationForecast(BaseModel):
@@ -123,3 +129,30 @@ class VerificationResult(BaseModel):
     provider_comments: dict[str, str] = Field(default_factory=dict)
     used_model: Optional[str] = None
     available: bool = True
+
+
+class CustomSource(BaseModel):
+    """User added source: a keyless Open-Meteo weather model."""
+
+    name: str = Field(pattern=r"^[a-z0-9_]{2,40}$")
+    model: str = Field(pattern=r"^[a-z0-9_]{2,64}$")
+    description: str = Field(default="", max_length=200)
+
+
+class SourceInfo(BaseModel):
+    """State of a single weather source as shown in the source control."""
+
+    name: str
+    description: str
+    requires_api_key: bool
+    #: ``False`` when a required API key is missing
+    configured: bool
+    #: global switch, disabled sources are never queried
+    enabled: bool
+    #: ``True`` when the source is configured and enabled
+    available: bool
+    custom: bool = False
+    model: Optional[str] = None
+    #: where the API key comes from: ``"ui"``, ``"environment"`` or ``None``.
+    #: The key itself is never returned.
+    api_key_origin: Optional[str] = None

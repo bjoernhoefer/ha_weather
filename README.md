@@ -32,6 +32,12 @@ verifies how accurate every source actually was and exposes a
   (`weather_season`, `weather_season_from`, `weather_season_to`,
   `weather_seasonal_change`) plus regime changes such as a pronounced cool down
   or a much wetter pattern (`upcoming_weather_change`).
+* **Live forecast verification** – the hourly forecast is compared with
+  EUMETSAT satellite data (cloud mask, lightning), an optional ha_satellite
+  service, the local thermometer and rain gauge. A wrong forecast raises
+  `forecast_failure` with a `failure_level` and an impact per consumer
+  (`watering_impact`, `heating_impact`), see
+  [docs/forecast-verification.md](docs/forecast-verification.md).
 * **Docker runtime** – anonymous in a local subnet, API key protected when
   published (e.g. Azure Container Instances).
 
@@ -69,6 +75,11 @@ All settings are environment variables prefixed with `HAW_`
 | `HAW_OPENWEATHERMAP_API_KEY` | – | enables the OpenWeatherMap provider |
 | `HAW_WEATHERAPI_API_KEY` | – | enables the WeatherAPI.com provider |
 | `HAW_AZURE_FOUNDRY_*` | – | Azure AI Foundry verification, see the docs |
+| `HAW_EUMETSAT_ENABLED` | `false` | query EUMETSAT cloud mask / lightning for the live check |
+| `HAW_EUMETSAT_CONSUMER_KEY` / `_SECRET` | – | optional EUMETSAT API credentials (OAuth2 token) |
+| `HAW_SATELLITE_URL` / `HAW_SATELLITE_API_KEY` | – | optional ha_satellite endpoint |
+| `HAW_LIVE_CHECK_*` | see docs | window, confirmations, stale and hold times |
+| `HAW_CONSUMERS` | watering + heating | JSON list of consumer profiles for the impact |
 
 Providers whose (free) API key is missing are simply skipped.
 
@@ -86,6 +97,9 @@ Providers whose (free) API key is missing are simply skipped.
 | `DELETE /api/ranking/{location}/{provider}` | remove the manual override |
 | `GET /api/season/{location}` | meteorological season sensors |
 | `POST /api/verify/{location}` | Azure AI Foundry assessment of the accuracy |
+| `POST /api/readings/{location}` | Home Assistant pushes thermometer / rain gauge readings and applied adjustments |
+| `GET /api/live-check/{location}` | live verification: failure flag, level, type, reason, impact per consumer |
+| `GET /api/failures/{location}` | stored forecast failure events |
 | `GET /api/homeassistant/{location}` | flat payload for the Home Assistant REST sensors |
 
 In `public` mode send the key as `X-API-Key: <key>` or

@@ -338,7 +338,7 @@ class WeatherService:
         impacts: List[ConsumerImpact],
         last_event: Optional[FailureEvent],
     ) -> FailureEvent:
-        now = now_utc()
+        now = now_utc().replace(microsecond=0)
         impact_map = {impact.consumer: impact.impact for impact in impacts}
         hold = timedelta(minutes=self.settings.live_check_hold_minutes)
         if (

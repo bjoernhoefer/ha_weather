@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
+from app.clock import today_utc
 from app.models import (
     DailyForecast,
     Observation,
@@ -35,7 +36,7 @@ def _forecast(provider: str, target: date, temp_max: float, precip: float):
 
 @pytest.fixture
 def seeded(storage):
-    yesterday = date.today() - timedelta(days=1)
+    yesterday = today_utc() - timedelta(days=1)
     storage.save_forecast(_forecast("good", yesterday, 20.0, 1.0))
     storage.save_forecast(_forecast("bad", yesterday, 26.0, 9.0))
     storage.save_observations(
@@ -67,7 +68,7 @@ def test_compute_scores_ranks_the_accurate_provider_higher(seeded):
 
 
 def test_today_and_same_day_forecasts_are_not_scored(storage):
-    today = date.today()
+    today = today_utc()
     storage.save_forecast(_forecast("good", today, 20.0, 1.0))
     storage.save_observations(
         [

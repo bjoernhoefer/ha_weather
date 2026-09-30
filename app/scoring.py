@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import math
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from typing import Dict, List, Optional
 
+from .clock import now_utc, today_utc
 from .models import Observation, ProviderOverride, ProviderRanking, ProviderScore
 from .storage import Storage, forecast_rows_by_provider
 
@@ -43,7 +44,7 @@ def compute_scores(
     overrides: Optional[Dict[str, ProviderOverride]] = None,
 ) -> List[ProviderScore]:
     """Compare archived forecasts with observations and score each provider."""
-    since = date.today() - timedelta(days=lookback_days)
+    since = today_utc() - timedelta(days=lookback_days)
     observations: Dict[date, Observation] = storage.observations(location_id, since)
     grouped = forecast_rows_by_provider(storage.forecast_history(location_id, since))
     overrides = overrides or {}
@@ -121,7 +122,7 @@ def build_ranking(location_id: str, scores: List[ProviderScore]) -> ProviderRank
     split = math.ceil(len(enabled) / 2) if enabled else 0
     return ProviderRanking(
         location_id=location_id,
-        generated_at=datetime.now(timezone.utc),
+        generated_at=now_utc(),
         top=enabled[:split],
         low=enabled[split:] + disabled,
     )

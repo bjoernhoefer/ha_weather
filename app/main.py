@@ -100,19 +100,19 @@ def create_app(
     @app.get(
         "/api/providers", response_model=List[ProviderInfo], dependencies=protected
     )
-    async def providers() -> List[ProviderInfo]:
-        infos: List[ProviderInfo] = []
-        for name, provider_cls in sorted(registered_providers().items()):
-            provider = provider_cls(settings)
-            infos.append(
-                ProviderInfo(
-                    name=name,
-                    description=provider_cls.description,
-                    requires_api_key=provider_cls.requires_api_key,
-                    available=provider.is_available(),
-                )
+    async def providers(
+        service: WeatherService = Depends(get_service),
+    ) -> List[ProviderInfo]:
+        active = {provider.name for provider in service.providers}
+        return [
+            ProviderInfo(
+                name=name,
+                description=provider_cls.description,
+                requires_api_key=provider_cls.requires_api_key,
+                available=name in active,
             )
-        return infos
+            for name, provider_cls in sorted(registered_providers().items())
+        ]
 
     @app.get(
         "/api/forecast/{location_id}",

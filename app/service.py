@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Callable, Dict, List, Optional
 
 import httpx
 
 from .aggregation import aggregate
 from .azure_foundry import AzureFoundryVerifier
+from .clock import now_utc, today_utc
 from .config import Location, Settings
 from .models import (
     LocationForecast,
@@ -113,11 +114,11 @@ class WeatherService:
         scores = self.scores(location.id)
         ranking = build_ranking(location.id, scores)
         days = aggregate(forecasts, provider_weights(scores))
-        season = build_season_info(date.today(), location.latitude, days)
+        season = build_season_info(today_utc(), location.latitude, days)
         return LocationForecast(
             location_id=location.id,
             location_name=location.name,
-            generated_at=datetime.now(timezone.utc),
+            generated_at=now_utc(),
             days=days,
             providers=forecasts,
             ranking=ranking,
@@ -138,7 +139,7 @@ class WeatherService:
         ttl = self.settings.cache_ttl_seconds
         if ttl <= 0:
             return True
-        age = datetime.now(timezone.utc) - forecast.generated_at
+        age = now_utc() - forecast.generated_at
         return age > timedelta(seconds=ttl)
 
     async def verify(self, location_id: str) -> VerificationResult:
@@ -164,7 +165,7 @@ class WeatherService:
         location = self.location(location_id)
         cached = self._cache.get(location_id)
         return build_season_info(
-            date.today(), location.latitude, cached.days if cached else []
+            today_utc(), location.latitude, cached.days if cached else []
         )
 
     # ------------------------------------------------------------------
@@ -172,7 +173,7 @@ class WeatherService:
         """Flat payload that maps 1:1 onto Home Assistant sensors."""
         forecast = await self.forecast(location_id)
         season = forecast.season or build_season_info(
-            date.today(), self.location(location_id).latitude, forecast.days
+            today_utc(), self.location(location_id).latitude, forecast.days
         )
         today = forecast.days[0] if forecast.days else None
         ranking = forecast.ranking

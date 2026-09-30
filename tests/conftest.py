@@ -8,6 +8,7 @@ from typing import List
 import httpx
 import pytest
 
+from app.clock import today_utc
 from app.config import Location, Settings
 from app.service import WeatherService
 from app.storage import Storage
@@ -110,7 +111,7 @@ def mock_transport(today: date) -> httpx.MockTransport:
 
 @pytest.fixture
 def today() -> date:
-    return date.today()
+    return today_utc()
 
 
 @pytest.fixture

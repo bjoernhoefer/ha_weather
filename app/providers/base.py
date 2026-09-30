@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import abc
 import logging
-from datetime import datetime, timezone
 from typing import Dict, List, Optional, Type
 
 import httpx
 
+from ..clock import now_utc
 from ..config import Location, Settings
 from ..models import DailyForecast, ProviderForecast
 
@@ -42,7 +42,7 @@ class WeatherProvider(abc.ABC):
         self, client: httpx.AsyncClient, location: Location
     ) -> ProviderForecast:
         """Fetch a forecast, converting failures into an error result."""
-        issued_at = datetime.now(timezone.utc)
+        issued_at = now_utc()
         try:
             days = await self._fetch(client, location)
         except Exception as exc:  # noqa: BLE001 - one bad source must not break all

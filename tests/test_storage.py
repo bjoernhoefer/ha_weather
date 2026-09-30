@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
+from app.clock import today_utc
 from app.models import DailyForecast, Observation, ProviderForecast, ProviderOverride
 from app.observations import observations_from_payload
 from app.storage import Storage
@@ -41,7 +42,7 @@ def test_failed_forecasts_are_not_stored(storage):
 
 
 def test_observations_round_trip(storage):
-    yesterday = date.today() - timedelta(days=1)
+    yesterday = today_utc() - timedelta(days=1)
     storage.save_observations(
         [
             Observation(
@@ -73,7 +74,7 @@ def test_purge_removes_old_rows(storage):
 
 
 def test_observations_ignore_the_running_day():
-    today = date.today()
+    today = today_utc()
     payload = open_meteo_payload(today - timedelta(days=2), 3)
     observations = observations_from_payload(payload, "vienna", today)
     assert [item.target_date for item in observations] == [

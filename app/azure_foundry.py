@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+import re
 from typing import Dict, List, Optional
 
 import httpx
 
+from .clock import now_utc
 from .config import Settings
 from .models import ProviderScore, VerificationResult
 
@@ -31,6 +32,10 @@ SYSTEM_PROMPT = (
     "Prefer providers with a low temperature and precipitation error and a high "
     "number of verified samples."
 )
+
+
+#: ```json ... ``` style code fences some models wrap their answer in.
+FENCE_PATTERN = re.compile(r"^```[a-zA-Z]*\s*(.*?)\s*```$", re.DOTALL)
 
 
 def build_prompt(location_name: str, scores: List[ProviderScore]) -> str:
@@ -54,9 +59,9 @@ def build_prompt(location_name: str, scores: List[ProviderScore]) -> str:
 def parse_completion(content: str) -> tuple[str, Dict[str, str]]:
     """Parse the model answer, tolerating plain text replies."""
     text = content.strip()
-    if text.startswith("```"):
-        text = text.strip("`").strip()
-        text = text.removeprefix("json").strip()
+    fenced = FENCE_PATTERN.match(text)
+    if fenced:
+        text = fenced.group(1).strip()
     try:
         data = json.loads(text)
     except (ValueError, TypeError):
@@ -98,7 +103,7 @@ class AzureFoundryVerifier:
         location_name: str,
         scores: List[ProviderScore],
     ) -> VerificationResult:
-        now = datetime.now(timezone.utc)
+        now = now_utc()
         if not self.configured:
             return VerificationResult(
                 location_id=location_id,

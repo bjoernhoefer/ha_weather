@@ -12,6 +12,7 @@ from typing import List
 
 import httpx
 
+from .clock import today_utc
 from .config import Location, Settings
 from .models import Observation
 from .providers.open_meteo import parse_open_meteo_daily
@@ -57,4 +58,4 @@ async def fetch_observations(
         },
     )
     response.raise_for_status()
-    return observations_from_payload(response.json(), location.id, date.today())
+    return observations_from_payload(response.json(), location.id, today_utc())

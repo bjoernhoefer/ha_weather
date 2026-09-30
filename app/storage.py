@@ -5,15 +5,11 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from typing import Dict, List, Optional, Tuple
 
+from .clock import today_utc
 from .models import Observation, ProviderForecast, ProviderOverride
-
-def _today() -> date:
-    """Single source of truth for 'today' (UTC) inside the archive."""
-    return datetime.now(timezone.utc).date()
-
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS forecasts (
@@ -121,7 +117,7 @@ class Storage:
             "SELECT * FROM forecasts WHERE location_id = ? AND lead_days >= 1"
             " AND target_date < ?"
         )
-        params: List[object] = [location_id, _today().isoformat()]
+        params: List[object] = [location_id, today_utc().isoformat()]
         if since is not None:
             query += " AND target_date >= ?"
             params.append(since.isoformat())
@@ -235,7 +231,7 @@ class Storage:
     # ------------------------------------------------------------------
     def purge_older_than(self, days: int) -> int:
         """Housekeeping: drop forecasts/observations older than ``days``."""
-        cutoff = (_today() - timedelta(days=days)).isoformat()
+        cutoff = (today_utc() - timedelta(days=days)).isoformat()
         with self._lock:
             removed = self._connection.execute(
                 "DELETE FROM forecasts WHERE target_date < ?", (cutoff,)

@@ -9,6 +9,7 @@
       :root { color-scheme: light dark; }
       body { font-family: system-ui, sans-serif; margin: 0; padding: 1.5rem; }
       h1 { margin-top: 0; font-size: 1.4rem; }
+      header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
       section { margin-bottom: 2rem; }
       table { border-collapse: collapse; width: 100%; max-width: 70rem; }
       th, td { border: 1px solid #8884; padding: .4rem .6rem; text-align: left; }
@@ -23,7 +24,10 @@
     </style>
   </head>
   <body>
-    <h1>ha_weather &ndash; multi source forecast</h1>
+    <header>
+      <h1>ha_weather &ndash; multi source forecast</h1>
+      <nav aria-label="Site navigation"><a href="/static/help.html">Help</a></nav>
+    </header>
 
     <section class="bar">
       <label>Location <select id="location"></select></label>

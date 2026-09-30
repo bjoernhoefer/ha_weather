@@ -1,0 +1,10 @@
+{
+  "version": "1.0",
+  "history": [
+    {
+      "version": "1.0",
+      "date": "2026-10-01",
+      "description": "First documented release: multi-source forecasts, accuracy ranking, source management, season and garden indicators, Home Assistant integration, and a help page."
+    }
+  ]
+}

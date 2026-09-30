@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+    <title>Help &ndash; ha_weather</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { font-family: system-ui, sans-serif; margin: 0; padding: 1.5rem; max-width: 55rem; line-height: 1.5; }
+      header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+      h1 { margin-top: 0; font-size: 1.4rem; }
+      section { margin-bottom: 2rem; }
+      li { margin-bottom: .5rem; }
+      .muted { opacity: .7; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>ha_weather &ndash; Help</h1>
+      <nav aria-label="Site navigation"><a href="/">Back to forecast</a></nav>
+    </header>
+
+    <main>
+      <section>
+        <h2>What can I do here?</h2>
+        <ul>
+          <li><strong>Location and forecast:</strong> select a location to see the weighted consensus forecast by hour, four-hour interval and day. Reload uses the cached result; Refresh forecast queries the sources again.</li>
+          <li><strong>Top / Low providers:</strong> compare weather sources by measured accuracy. Set a manual rank or disable a provider for the selected location; Reset removes that override.</li>
+          <li><strong>Source control:</strong> enable or disable sources for all locations, save API keys for sources that need them, or add a keyless Open-Meteo model.</li>
+          <li><strong>Season and garden indicators:</strong> view seasonal and upcoming weather changes alongside evapotranspiration, water balance, sunshine, radiation and soil moisture.</li>
+          <li><strong>Verify with Azure AI Foundry:</strong> request an additional assessment when an Azure AI Foundry deployment is configured.</li>
+          <li><strong>Public mode:</strong> enter your API key in the field on the forecast page before loading data. The key is stored in this browser.</li>
+        </ul>
+      </section>
+
+      <section aria-labelledby="history-heading">
+        <h2 id="history-heading">Version history</h2>
+        <p id="version-status" role="status">Loading version history…</p>
+        <ol id="version-history" reversed></ol>
+      </section>
+    </main>
+
+    <script>
+      async function loadVersionHistory() {
+        try {
+          const response = await fetch("/static/version.json");
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const release = await response.json();
+          document.getElementById("version-status").textContent = `Current version: ${release.version}`;
+          const history = document.getElementById("version-history");
+          release.history.forEach((entry) => {
+            const item = document.createElement("li");
+            const title = document.createElement("strong");
+            title.textContent = `${entry.version} (${entry.date})`;
+            item.append(title, document.createTextNode(` — ${entry.description}`));
+            history.appendChild(item);
+          });
+        } catch (error) {
+          document.getElementById("version-status").textContent = `Version history unavailable: ${error.message}`;
+        }
+      }
+      loadVersionHistory();
+    </script>
+  </body>
+</html>

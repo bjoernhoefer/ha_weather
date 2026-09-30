@@ -123,3 +123,27 @@ class VerificationResult(BaseModel):
     provider_comments: dict[str, str] = Field(default_factory=dict)
     used_model: Optional[str] = None
     available: bool = True
+
+
+class CustomSource(BaseModel):
+    """User added source: a keyless Open-Meteo weather model."""
+
+    name: str = Field(pattern=r"^[a-z0-9_]{2,40}$")
+    model: str = Field(pattern=r"^[a-z0-9_]{2,64}$")
+    description: str = Field(default="", max_length=200)
+
+
+class SourceInfo(BaseModel):
+    """State of a single weather source as shown in the source control."""
+
+    name: str
+    description: str
+    requires_api_key: bool
+    #: ``False`` when a required API key is missing
+    configured: bool
+    #: global switch, disabled sources are never queried
+    enabled: bool
+    #: ``True`` when the source is configured and enabled
+    available: bool
+    custom: bool = False
+    model: Optional[str] = None

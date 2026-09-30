@@ -142,3 +142,29 @@ async def test_provider_failure_is_captured(settings):
         result = await provider.fetch(client, VIENNA)
     assert not result.ok
     assert "500" in (result.error or "")
+
+
+async def test_open_meteo_model_provider_sends_models_parameter(today):
+    from app.providers.open_meteo import OpenMeteoModelProvider
+
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(request.url.params)
+        seen["host"] = request.url.host
+        return httpx.Response(200, json=open_meteo_payload(today, 3))
+
+    provider = OpenMeteoModelProvider(Settings(), "custom_icon", "icon_d2")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await provider.fetch(client, VIENNA)
+    assert result.ok
+    assert result.provider == "custom_icon"
+    assert seen["models"] == "icon_d2"
+    assert seen["host"] == "api.open-meteo.com"
+
+
+def test_open_meteo_model_provider_rejects_invalid_models():
+    from app.providers.open_meteo import OpenMeteoModelProvider
+
+    with pytest.raises(ValueError):
+        OpenMeteoModelProvider(Settings(), "x", "icon_d2&foo=bar")

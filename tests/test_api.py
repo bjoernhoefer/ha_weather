@@ -152,3 +152,84 @@ def test_public_mode_without_configured_keys_fails_closed(tmp_path, client_facto
         create_app(settings, service), raise_server_exceptions=False
     ) as client:
         assert client.get("/api/locations").status_code == 500
+
+
+def test_sources_list_builtin_and_keyless_open_meteo_models(api):
+    sources = {item["name"]: item for item in api.get("/api/sources").json()}
+    for name in ("ecmwf_ifs", "meteofrance", "ukmo", "gem"):
+        assert sources[name]["available"] is True
+        assert sources[name]["requires_api_key"] is False
+    assert sources["openweathermap"]["configured"] is False
+    assert sources["openweathermap"]["available"] is False
+    catalog = {item["model"] for item in api.get("/api/sources/catalog").json()}
+    assert "icon_d2" in catalog
+
+
+def test_source_can_be_disabled_globally(api):
+    updated = {
+        item["name"]: item
+        for item in api.put("/api/sources/met_no", json={"enabled": False}).json()
+    }
+    assert updated["met_no"]["enabled"] is False
+    assert updated["met_no"]["available"] is False
+
+    forecast = api.get("/api/forecast/vienna").json()
+    assert "met_no" not in {item["provider"] for item in forecast["providers"]}
+    ranking = forecast["ranking"]
+    assert "met_no" not in {e["provider"] for e in ranking["top"] + ranking["low"]}
+
+    api.put("/api/sources/met_no", json={"enabled": True})
+    forecast = api.get("/api/forecast/vienna").json()
+    assert "met_no" in {item["provider"] for item in forecast["providers"]}
+
+
+def test_switch_unknown_source_returns_404(api):
+    assert api.put("/api/sources/nope", json={"enabled": False}).status_code == 404
+
+
+def test_custom_source_round_trip(api):
+    response = api.post(
+        "/api/sources",
+        json={"name": "icon_d2", "model": "icon_d2", "description": "ICON-D2"},
+    )
+    assert response.status_code == 201
+    custom = {item["name"]: item for item in response.json()}["icon_d2"]
+    assert custom["custom"] is True and custom["available"] is True
+    assert custom["model"] == "icon_d2"
+
+    forecast = api.get("/api/forecast/vienna").json()
+    icon = [item for item in forecast["providers"] if item["provider"] == "icon_d2"]
+    assert icon and icon[0]["days"]
+
+    # manual ranking works for custom sources as well
+    ranking = api.put(
+        "/api/ranking/vienna/icon_d2", json={"manual_rank": 1, "enabled": True}
+    ).json()
+    assert ranking["top"][0]["provider"] == "icon_d2"
+
+    assert api.post(
+        "/api/sources", json={"name": "icon_d2", "model": "icon_eu"}
+    ).status_code == 409
+
+    remaining = api.delete("/api/sources/icon_d2").json()
+    assert "icon_d2" not in {item["name"] for item in remaining}
+    assert api.delete("/api/sources/icon_d2").status_code == 404
+
+
+def test_custom_source_cannot_replace_or_delete_builtin(api):
+    assert api.post(
+        "/api/sources", json={"name": "met_no", "model": "metno_seamless"}
+    ).status_code == 409
+    assert api.delete("/api/sources/met_no").status_code == 409
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"name": "Bad Name", "model": "icon_d2"},
+        {"name": "ok_name", "model": "icon_d2&apikey=x"},
+        {"name": "ok_name", "model": "../../evil"},
+    ],
+)
+def test_custom_source_input_is_validated(api, payload):
+    assert api.post("/api/sources", json=payload).status_code == 422

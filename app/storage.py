@@ -6,10 +6,10 @@ import os
 import sqlite3
 import threading
 from datetime import date, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from .clock import today_utc
-from .models import Observation, ProviderForecast, ProviderOverride
+from .models import CustomSource, Observation, ProviderForecast, ProviderOverride
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS forecasts (
@@ -41,6 +41,15 @@ CREATE TABLE IF NOT EXISTS overrides (
     enabled INTEGER NOT NULL DEFAULT 1,
     note TEXT,
     PRIMARY KEY (provider, location_id)
+);
+CREATE TABLE IF NOT EXISTS source_settings (
+    provider TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS custom_sources (
+    name TEXT PRIMARY KEY,
+    model TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -227,6 +236,64 @@ class Storage:
             )
             for row in rows
         }
+
+    # ------------------------------------------------------------------
+    # source control
+    # ------------------------------------------------------------------
+    def set_source_enabled(self, provider: str, enabled: bool) -> None:
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO source_settings (provider, enabled) VALUES (?, ?)
+                ON CONFLICT (provider) DO UPDATE SET enabled=excluded.enabled
+                """,
+                (provider, 1 if enabled else 0),
+            )
+            self._connection.commit()
+
+    def disabled_sources(self) -> Set[str]:
+        with self._lock:
+            rows = list(
+                self._connection.execute(
+                    "SELECT provider FROM source_settings WHERE enabled = 0"
+                )
+            )
+        return {row["provider"] for row in rows}
+
+    def save_custom_source(self, source: CustomSource) -> None:
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO custom_sources (name, model, description) VALUES (?, ?, ?)
+                ON CONFLICT (name)
+                DO UPDATE SET model=excluded.model, description=excluded.description
+                """,
+                (source.name, source.model, source.description),
+            )
+            self._connection.commit()
+
+    def delete_custom_source(self, name: str) -> bool:
+        with self._lock:
+            cursor = self._connection.execute(
+                "DELETE FROM custom_sources WHERE name = ?", (name,)
+            )
+            self._connection.execute(
+                "DELETE FROM source_settings WHERE provider = ?", (name,)
+            )
+            self._connection.commit()
+        return cursor.rowcount > 0
+
+    def custom_sources(self) -> List[CustomSource]:
+        with self._lock:
+            rows = list(
+                self._connection.execute("SELECT * FROM custom_sources ORDER BY name")
+            )
+        return [
+            CustomSource(
+                name=row["name"], model=row["model"], description=row["description"]
+            )
+            for row in rows
+        ]
 
     # ------------------------------------------------------------------
     def purge_older_than(self, days: int) -> int:

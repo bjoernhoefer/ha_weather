@@ -14,16 +14,19 @@ from .azure_foundry import AzureFoundryVerifier
 from .clock import now_utc, today_utc
 from .config import Location, Settings
 from .models import (
+    CustomSource,
     LocationForecast,
     ProviderForecast,
     ProviderOverride,
     ProviderRanking,
     ProviderScore,
     SeasonInfo,
+    SourceInfo,
     VerificationResult,
 )
 from .observations import fetch_observations
-from .providers import build_providers
+from .providers import WeatherProvider, build_providers, registered_providers
+from .providers.open_meteo import OpenMeteoModelProvider
 from .scoring import build_ranking, compute_scores, provider_weights
 from .seasons import build_season_info
 from .storage import Storage
@@ -35,6 +38,14 @@ ClientFactory = Callable[[], httpx.AsyncClient]
 
 class UnknownLocationError(LookupError):
     """Raised when a location id is not configured."""
+
+
+class UnknownSourceError(LookupError):
+    """Raised when a source (provider) name is not known."""
+
+
+class SourceConflictError(ValueError):
+    """Raised when a custom source would clash with an existing one."""
 
 
 class WeatherService:
@@ -49,12 +60,102 @@ class WeatherService:
         self.settings = settings
         self.storage = storage
         self.verifier = AzureFoundryVerifier(settings)
-        self.providers = build_providers(settings)
+        self.providers: List[WeatherProvider] = []
         self._client_factory = client_factory or self._default_client
         self._cache: Dict[str, LocationForecast] = {}
+        self.reload_providers()
 
     def _default_client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(timeout=self.settings.request_timeout_seconds)
+
+    # ------------------------------------------------------------------
+    # source control
+    # ------------------------------------------------------------------
+    def _custom_providers(self) -> List[WeatherProvider]:
+        providers: List[WeatherProvider] = []
+        for source in self.storage.custom_sources():
+            if source.name in registered_providers():
+                continue  # built-in sources always win
+            providers.append(
+                OpenMeteoModelProvider(
+                    self.settings, source.name, source.model, source.description
+                )
+            )
+        return providers
+
+    def reload_providers(self) -> None:
+        """Rebuild the active provider list after a source control change."""
+        disabled = self.storage.disabled_sources()
+        candidates = build_providers(self.settings) + self._custom_providers()
+        self.providers = [p for p in candidates if p.name not in disabled]
+        self._cache.clear()
+
+    def is_known_source(self, name: str) -> bool:
+        return name in registered_providers() or any(
+            source.name == name for source in self.storage.custom_sources()
+        )
+
+    def sources(self) -> List[SourceInfo]:
+        """All built-in and custom sources with their current state."""
+        disabled = self.storage.disabled_sources()
+        result: List[SourceInfo] = []
+        for name, provider_cls in sorted(registered_providers().items()):
+            configured = provider_cls(self.settings).is_available()
+            enabled = name not in disabled
+            result.append(
+                SourceInfo(
+                    name=name,
+                    description=provider_cls.description,
+                    requires_api_key=provider_cls.requires_api_key,
+                    configured=configured,
+                    enabled=enabled,
+                    available=configured and enabled,
+                    model=getattr(provider_cls, "model", None),
+                )
+            )
+        for provider in self._custom_providers():
+            enabled = provider.name not in disabled
+            result.append(
+                SourceInfo(
+                    name=provider.name,
+                    description=provider.description,
+                    requires_api_key=False,
+                    configured=True,
+                    enabled=enabled,
+                    available=enabled,
+                    custom=True,
+                    model=provider.model,
+                )
+            )
+        return result
+
+    def set_source_enabled(self, name: str, enabled: bool) -> List[SourceInfo]:
+        if not self.is_known_source(name):
+            raise UnknownSourceError(name)
+        self.storage.set_source_enabled(name, enabled)
+        self.reload_providers()
+        return self.sources()
+
+    def add_custom_source(self, source: CustomSource) -> List[SourceInfo]:
+        if source.name in registered_providers():
+            raise SourceConflictError(
+                f"'{source.name}' is a built-in source and cannot be replaced"
+            )
+        if any(item.name == source.name for item in self.storage.custom_sources()):
+            raise SourceConflictError(f"custom source '{source.name}' already exists")
+        self.storage.save_custom_source(source)
+        self.reload_providers()
+        return self.sources()
+
+    def delete_custom_source(self, name: str) -> List[SourceInfo]:
+        if name in registered_providers():
+            raise SourceConflictError(
+                f"'{name}' is a built-in source, disable it instead of deleting it"
+            )
+        if not self.storage.delete_custom_source(name):
+            raise UnknownSourceError(name)
+        self.reload_providers()
+        return self.sources()
 
     # ------------------------------------------------------------------
     def location(self, location_id: str) -> Location:
@@ -66,7 +167,11 @@ class WeatherService:
     def scores(self, location_id: str) -> List[ProviderScore]:
         overrides = self.storage.overrides(location_id)
         known = {provider.name for provider in self.providers}
-        scores = compute_scores(location_id, self.storage, overrides=overrides)
+        scores = [
+            score
+            for score in compute_scores(location_id, self.storage, overrides=overrides)
+            if score.provider in known
+        ]
         present = {score.provider for score in scores}
         for provider in sorted(known - present):
             override = overrides.get(provider)

@@ -15,14 +15,21 @@ from pydantic import BaseModel
 from .auth import require_api_key
 from .config import Location, Settings, get_settings
 from .models import (
+    CustomSource,
     LocationForecast,
     ProviderOverride,
     ProviderRanking,
     SeasonInfo,
+    SourceInfo,
     VerificationResult,
 )
-from .providers import registered_providers
-from .service import UnknownLocationError, WeatherService
+from .providers.open_meteo import OPEN_METEO_MODEL_CATALOG
+from .service import (
+    SourceConflictError,
+    UnknownLocationError,
+    UnknownSourceError,
+    WeatherService,
+)
 from .storage import Storage
 
 LOGGER = logging.getLogger(__name__)
@@ -42,6 +49,17 @@ class ProviderInfo(BaseModel):
     description: str
     requires_api_key: bool
     available: bool
+
+
+class SourceSwitch(BaseModel):
+    """Body of the global enable/disable switch of the source control."""
+
+    enabled: bool
+
+
+class CatalogEntry(BaseModel):
+    model: str
+    description: str
 
 
 def get_service(request: Request) -> WeatherService:
@@ -103,16 +121,78 @@ def create_app(
     async def providers(
         service: WeatherService = Depends(get_service),
     ) -> List[ProviderInfo]:
-        active = {provider.name for provider in service.providers}
         return [
             ProviderInfo(
-                name=name,
-                description=provider_cls.description,
-                requires_api_key=provider_cls.requires_api_key,
-                available=name in active,
+                name=source.name,
+                description=source.description,
+                requires_api_key=source.requires_api_key,
+                available=source.available,
             )
-            for name, provider_cls in sorted(registered_providers().items())
+            for source in service.sources()
         ]
+
+    @app.get("/api/sources", response_model=List[SourceInfo], dependencies=protected)
+    async def sources(
+        service: WeatherService = Depends(get_service),
+    ) -> List[SourceInfo]:
+        return service.sources()
+
+    @app.get(
+        "/api/sources/catalog",
+        response_model=List[CatalogEntry],
+        dependencies=protected,
+    )
+    async def source_catalog() -> List[CatalogEntry]:
+        return [
+            CatalogEntry(model=model, description=description)
+            for model, description in OPEN_METEO_MODEL_CATALOG.items()
+        ]
+
+    @app.post(
+        "/api/sources",
+        response_model=List[SourceInfo],
+        status_code=status.HTTP_201_CREATED,
+        dependencies=protected,
+    )
+    async def add_source(
+        body: CustomSource, service: WeatherService = Depends(get_service)
+    ) -> List[SourceInfo]:
+        try:
+            return service.add_custom_source(body)
+        except SourceConflictError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+            ) from exc
+
+    @app.put(
+        "/api/sources/{name}",
+        response_model=List[SourceInfo],
+        dependencies=protected,
+    )
+    async def switch_source(
+        name: str, body: SourceSwitch, service: WeatherService = Depends(get_service)
+    ) -> List[SourceInfo]:
+        try:
+            return service.set_source_enabled(name, body.enabled)
+        except UnknownSourceError as exc:
+            raise _unknown_source(exc) from exc
+
+    @app.delete(
+        "/api/sources/{name}",
+        response_model=List[SourceInfo],
+        dependencies=protected,
+    )
+    async def delete_source(
+        name: str, service: WeatherService = Depends(get_service)
+    ) -> List[SourceInfo]:
+        try:
+            return service.delete_custom_source(name)
+        except UnknownSourceError as exc:
+            raise _unknown_source(exc) from exc
+        except SourceConflictError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+            ) from exc
 
     @app.get(
         "/api/forecast/{location_id}",
@@ -160,7 +240,7 @@ def create_app(
         body: OverrideRequest,
         service: WeatherService = Depends(get_service),
     ) -> ProviderRanking:
-        if provider not in registered_providers():
+        if not service.is_known_source(provider):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Unknown provider '{provider}'",
@@ -220,6 +300,12 @@ def create_app(
 def _unknown_location(exc: UnknownLocationError) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown location '{exc}'"
+    )
+
+
+def _unknown_source(exc: UnknownSourceError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown source '{exc}'"
     )
 
 

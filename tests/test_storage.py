@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from app.clock import today_utc
-from app.models import DailyForecast, Observation, ProviderForecast, ProviderOverride
+from app.models import CustomSource, DailyForecast, Observation, ProviderForecast, ProviderOverride
 from app.observations import observations_from_payload
 from app.storage import Storage
 
@@ -87,3 +87,19 @@ def test_in_memory_database_can_be_created():
     storage = Storage(":memory:")
     assert storage.observations("vienna") == {}
     storage.close()
+
+
+def test_source_control_persistence(storage):
+    assert storage.disabled_sources() == set()
+    storage.set_source_enabled("met_no", False)
+    assert storage.disabled_sources() == {"met_no"}
+    storage.set_source_enabled("met_no", True)
+    assert storage.disabled_sources() == set()
+
+    storage.save_custom_source(CustomSource(name="icon_d2", model="icon_d2"))
+    storage.set_source_enabled("icon_d2", False)
+    assert [source.name for source in storage.custom_sources()] == ["icon_d2"]
+    assert storage.delete_custom_source("icon_d2") is True
+    assert storage.custom_sources() == []
+    assert storage.disabled_sources() == set()
+    assert storage.delete_custom_source("icon_d2") is False

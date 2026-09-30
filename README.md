@@ -17,9 +17,16 @@ verifies how accurate every source actually was and exposes a
   | `dwd_icon` – DWD ICON via Open-Meteo | public, no registration |
   | `noaa_gfs` – NOAA GFS via Open-Meteo | public, no registration |
   | `met_no` – MET Norway Locationforecast 2.0 | public, no registration |
+  | `ecmwf_ifs` – ECMWF IFS 0.25° via Open-Meteo | public, no registration |
+  | `meteofrance` – Météo-France ARPEGE/AROME via Open-Meteo | public, no registration |
+  | `ukmo` – UK Met Office Unified Model via Open-Meteo | public, no registration |
+  | `gem` – Environment Canada GEM via Open-Meteo | public, no registration |
   | `openweathermap` – OpenWeatherMap 5 day | free registration (`HAW_OPENWEATHERMAP_API_KEY`) |
   | `weatherapi` – WeatherAPI.com | free registration (`HAW_WEATHERAPI_API_KEY`) |
 
+* **Source control** – every source can be switched on/off globally in the web
+  UI, and additional keyless sources (any Open-Meteo weather model) can be
+  added and removed at runtime, see [Source control](#source-control).
 * **Weighted consensus forecast** – accurate providers count more.
 * **Accuracy verification** – every forecast is archived in SQLite and compared
   with the measured values of the following days (mean absolute error for
@@ -79,6 +86,11 @@ Providers whose (free) API key is missing are simply skipped.
 | `GET /health` | liveness probe, never authenticated |
 | `GET /api/locations` | configured locations |
 | `GET /api/providers` | registered providers and their availability |
+| `GET /api/sources` | source control: all built-in and custom sources with their state |
+| `GET /api/sources/catalog` | suggested keyless Open-Meteo models for custom sources |
+| `POST /api/sources` | add a custom source `{"name": "icon_d2", "model": "icon_d2", "description": ""}` |
+| `PUT /api/sources/{name}` | switch a source on/off for all locations `{"enabled": false}` |
+| `DELETE /api/sources/{name}` | remove a custom source (built-in sources can only be disabled) |
 | `GET /api/forecast/{location}` | consensus + per provider forecast, ranking and season |
 | `POST /api/forecast/{location}/refresh` | force a new query of all providers |
 | `GET /api/ranking/{location}` | Top/Low provider list |
@@ -90,6 +102,36 @@ Providers whose (free) API key is missing are simply skipped.
 
 In `public` mode send the key as `X-API-Key: <key>` or
 `Authorization: Bearer <key>`.
+
+## Source control
+
+The **Source control** section of the web UI lists every weather source with
+its type (built-in/custom), API key state and a global *Enabled* switch.
+Disabled sources are not queried at all and disappear from the consensus and
+the Top/Low list (their archived forecasts are kept). The switches are stored
+in the SQLite database and survive restarts.
+
+New sources that need **no API key** can be added as custom sources: pick an
+id and an [Open-Meteo weather model](https://open-meteo.com/en/docs) (the UI
+suggests the models from `GET /api/sources/catalog`, e.g. `icon_d2`,
+`meteofrance_arome_france_hd`, `knmi_seamless`, `italia_meteo_arpae_icon_2i`).
+For security reasons only the model name is user controlled – requests always
+go to `api.open-meteo.com`, arbitrary URLs cannot be configured.
+
+### Evaluated sources
+
+| Source | API key | Status |
+| --- | --- | --- |
+| ECMWF IFS, Météo-France, UK Met Office, Environment Canada GEM (Open-Meteo) | no | **added** as built-in providers |
+| Further Open-Meteo models (ICON-D2/EU, AROME HD, KNMI, DMI, JMA, MET Nordic, ItaliaMeteo ICON-2I, MeteoSwiss ICON-CH2, CMA, BoM, ECMWF AIFS, …) | no | available as **custom sources** via the source control |
+| GeoSphere Austria (dataset.api.hub.geosphere.at) | no | candidate – very good for Vienna, needs an own parser (hourly NWP time series) |
+| Bright Sky (DWD MOSMIX/observations) | no | candidate – Germany centric, little value for Vienna/Porto Cristo |
+| wttr.in | no | not added – only 3 days, rate limited, no stable SLA |
+| 7Timer! | no | not added – coarse resolution, no daily precipitation totals |
+| US National Weather Service (api.weather.gov) | no | not applicable – US locations only |
+| AEMET OpenData (Spain) | free key | candidate for Porto Cristo, requires registration |
+| Tomorrow.io, Visual Crossing, Pirate Weather, Meteoblue, AccuWeather | free key | possible future providers, require registration |
+| `openweathermap`, `weatherapi` | free key | already supported |
 
 ## Home Assistant
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -35,6 +36,7 @@ from .storage import Storage
 
 LOGGER = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
+VERSION = json.loads((STATIC_DIR / "version.json").read_text(encoding="utf-8"))["version"]
 
 
 class OverrideRequest(BaseModel):
@@ -95,7 +97,7 @@ def create_app(
 
     app = FastAPI(
         title="ha_weather",
-        version="1.0.0",
+        version=VERSION,
         description=(
             "Multi source weather prediction for Home Assistant with provider "
             "accuracy verification and meteorological season sensors."

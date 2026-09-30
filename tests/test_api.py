@@ -27,6 +27,21 @@ def test_ui_is_served(api):
     assert "ha_weather" in response.text
 
 
+def test_help_and_version_history_are_served(api):
+    assert 'href="/static/help.html">Help</a>' in api.get("/").text
+    help_page = api.get("/static/help.html")
+    assert help_page.status_code == 200
+    assert "Version history" in help_page.text
+    assert 'href="/">Back to forecast</a>' in help_page.text
+    assert 'fetch("/static/version.json")' in help_page.text
+
+    release = api.get("/static/version.json").json()
+    assert release["version"] == "1.0"
+    assert release["history"][0]["version"] == release["version"]
+    assert release["history"][0]["description"]
+    assert api.get("/openapi.json").json()["info"]["version"] == release["version"]
+
+
 def test_locations_and_providers(api):
     assert [item["id"] for item in api.get("/api/locations").json()] == ["vienna"]
     providers = {item["name"]: item for item in api.get("/api/providers").json()}
@@ -146,6 +161,8 @@ def test_public_mode_requires_an_api_key(tmp_path, client_factory):
     service = WeatherService(settings, storage, client_factory=client_factory)
     with TestClient(create_app(settings, service)) as client:
         assert client.get("/health").status_code == 200
+        assert client.get("/static/help.html").status_code == 200
+        assert client.get("/static/version.json").status_code == 200
         assert client.get("/api/locations").status_code == 401
         assert client.get("/api/locations", headers={"X-API-Key": "wrong"}).status_code == 401
         assert client.get("/api/locations", headers={"X-API-Key": "s3cret"}).status_code == 200

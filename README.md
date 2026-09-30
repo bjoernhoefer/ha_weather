@@ -63,6 +63,19 @@ docker compose up -d
 
 Open <http://localhost:8080/> for the web UI or
 <http://localhost:8080/docs> for the OpenAPI documentation.
+The **Help** link in the page header explains the controls and shows the
+version history.
+
+### Versioning
+
+The current version and its history are kept in
+[`app/static/version.json`](app/static/version.json). The help page reads this
+file, and FastAPI uses its `version` field for the OpenAPI metadata. This is
+version **1.0**. For each subsequent change, propose a new version number and
+a one- or two-sentence release description in the pull request. When releasing,
+set `version` to the proposed number and prepend a matching dated entry to
+`history` (newest first). Use a minor version for new functionality and a
+patch version for fixes.
 
 The Compose file pulls the published image from GHCR. For local changes, build
 it yourself with `docker build -t ghcr.io/bjoernhoefer/ha_weather:latest .`

@@ -354,7 +354,10 @@ class Storage:
             current = chosen.get(target)
             if current is None:
                 chosen[target] = row
-            # both columns are written through utc_text(), so the text
+            # rows are ordered by (target_time, issued_at): the first row per
+            # hour is the oldest run (fallback), later rows replace it while
+            # they were issued at or before the hour. Both columns are written
+            # through utc_text(), so the text
             # comparison is a time comparison; for future hours every run is
             # issued before the target and the newest one wins
             elif row["issued_at"] <= target:

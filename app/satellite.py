@@ -19,7 +19,7 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -293,9 +293,19 @@ class EumetsatClient:
         return feature_info_values(response.text)
 
     async def fetch(
-        self, client: httpx.AsyncClient, location: Location
+        self,
+        client: httpx.AsyncClient,
+        location: Location,
+        scene: Optional[datetime] = None,
     ) -> List[SatelliteReading]:
+        """Query the newest scene; ``scene`` is its time (computed if omitted)."""
         settings = self.settings
+        if scene is None:
+            scene = scene_time(
+                now_utc(),
+                settings.eumetsat_interval_minutes,
+                settings.eumetsat_lag_minutes,
+            )
         headers = await self._headers(client)
         points = sample_points(location, settings.eumetsat_sample_offset_deg)
 
@@ -330,11 +340,7 @@ class EumetsatClient:
         return [
             SatelliteReading(
                 location_id=location.id,
-                observed_at=scene_time(
-                    now_utc(),
-                    settings.eumetsat_interval_minutes,
-                    settings.eumetsat_lag_minutes,
-                ),
+                observed_at=scene,
                 cloud_cover=(
                     round(100.0 * sum(cloudy) / len(cloudy), 1) if cloudy else None
                 ),
@@ -345,6 +351,3 @@ class EumetsatClient:
             )
         ]
 
-
-def latest_reading_time(readings: Sequence[SatelliteReading]) -> Optional[datetime]:
-    return max((reading.observed_at for reading in readings), default=None)

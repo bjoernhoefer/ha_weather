@@ -256,7 +256,9 @@ class WeatherService:
                 if not already_queried:
                     try:
                         self.storage.save_satellite_readings(
-                            await self.eumetsat.fetch(client, location)
+                            await self.eumetsat.fetch(
+                                client, location, scene=newest_scene
+                            )
                         )
                     except Exception as exc:  # noqa: BLE001 - source is optional
                         LOGGER.warning("EUMETSAT failed for %s: %s", location.id, exc)

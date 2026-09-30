@@ -128,14 +128,14 @@ class Settings(BaseSettings):
     #: distance of the four extra sample points around the location
     eumetsat_sample_offset_deg: float = 0.1
     #: products are refreshed every 15 minutes and published ~15 minutes late
-    eumetsat_interval_minutes: int = 15
-    eumetsat_lag_minutes: int = 15
+    eumetsat_interval_minutes: int = Field(default=15, ge=1)
+    eumetsat_lag_minutes: int = Field(default=15, ge=0)
 
-    live_check_past_hours: int = 3
-    live_check_ahead_hours: int = 3
-    live_check_confirmations: int = 3
-    live_check_stale_minutes: int = 60
-    live_check_hold_minutes: int = 120
+    live_check_past_hours: int = Field(default=3, ge=1)
+    live_check_ahead_hours: int = Field(default=3, ge=0)
+    live_check_confirmations: int = Field(default=3, ge=1)
+    live_check_stale_minutes: int = Field(default=60, ge=1)
+    live_check_hold_minutes: int = Field(default=120, ge=0)
     consumers: List[ConsumerProfile] = Field(
         default_factory=lambda: list(DEFAULT_CONSUMERS)
     )

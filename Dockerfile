@@ -1,5 +1,7 @@
 FROM python:3.12-slim
 
+LABEL org.opencontainers.image.source="https://github.com/bjoernhoefer/ha_weather"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HAW_DATABASE_PATH=/data/ha_weather.sqlite3

@@ -56,11 +56,29 @@ verifies how accurate every source actually was and exposes a
 
 ```bash
 cp .env.example .env          # optional: add API keys
-docker compose up --build
+docker compose up -d
 ```
 
 Open <http://localhost:8080/> for the web UI or
 <http://localhost:8080/docs> for the OpenAPI documentation.
+
+The Compose file pulls the published image from GHCR. For local changes, build
+it yourself with `docker build -t ghcr.io/bjoernhoefer/ha_weather:latest .`
+before running `docker compose up -d`.
+
+### Automatic Docker updates
+
+After CI succeeds on `main`, GitHub Actions publishes `linux/amd64` and
+`linux/arm64` images as `ghcr.io/bjoernhoefer/ha_weather:latest` and a
+commit-specific tag. The first package must be made **public** in GitHub's
+package settings (packages are private by default) so hosts can pull it
+without registry credentials. The server at `192.168.188.13` uses
+`docker-compose.host.yml`, which retains port 6070 and the persistent
+`ha_weather_data` volume. Its existing Watchtower checks for new images daily
+at 04:00 and restarts the container when `latest` changes. Deploy the first
+image with `docker compose -f docker-compose.host.yml pull ha_weather` and
+`docker compose -f docker-compose.host.yml up -d --no-deps ha_weather`; no
+checkout or rebuild is needed for subsequent releases.
 
 Without Docker:
 

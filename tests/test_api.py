@@ -94,9 +94,23 @@ def test_home_assistant_state_exposes_the_sensors(api):
         "weather_season_from",
         "weather_season_to",
         "top_provider",
+        "evapotranspiration_mm",
+        "water_balance_mm",
+        "water_balance_3d_mm",
+        "watering_recommended",
+        "sunshine_hours",
+        "radiation_mj_m2",
+        "soil_moisture",
     ):
         assert key in payload
     assert payload["forecast"]
+    assert payload["evapotranspiration_mm"] == 4.0
+    assert payload["sunshine_hours"] == 10.0
+    assert payload["soil_moisture"] == 0.25
+    # consensus rain (~2 mm) minus 4 mm ET0 per day -> 3 day deficit
+    assert payload["water_balance_mm"] < 0
+    assert payload["watering_recommended"] is True
+    assert payload["forecast"][0]["evapotranspiration_mm"] == 4.0
 
 
 def test_verify_endpoint_uses_azure_foundry(settings, storage, client_factory):

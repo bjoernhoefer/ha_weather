@@ -163,6 +163,27 @@ def aemet_hourly_payload(start: date) -> list:
     ]
 
 
+def agro_payload(start: date, count: int = 7) -> dict:
+    return {
+        "daily": {
+            "time": _dates(start, count),
+            "et0_fao_evapotranspiration": [4.0 for _ in range(count)],
+            "sunshine_duration": [36000.0 for _ in range(count)],
+            "shortwave_radiation_sum": [20.5 for _ in range(count)],
+        }
+    }
+
+
+def soil_payload(start: date, count: int = 2) -> dict:
+    times, values = [], []
+    for index in range(count):
+        day = start + timedelta(days=index)
+        for hour in range(24):
+            times.append(f"{day.isoformat()}T{hour:02d}:00")
+            values.append(0.2 if hour < 12 else 0.3)
+    return {"hourly": {"time": times, "soil_moisture_3_to_9cm": values}}
+
+
 def mock_transport(today: date) -> httpx.MockTransport:
     """Answer every outgoing request with a deterministic payload."""
 
@@ -204,6 +225,10 @@ def mock_transport(today: date) -> httpx.MockTransport:
         if host == "api.weatherapi.com":
             return httpx.Response(404, json={"error": "no api key"})
         if host == "api.open-meteo.com":
+            if "et0_fao_evapotranspiration" in request.url.params.get("daily", ""):
+                return httpx.Response(200, json=agro_payload(today))
+            if "hourly" in request.url.params:
+                return httpx.Response(200, json=soil_payload(today))
             if "past_days" in request.url.params:
                 return httpx.Response(
                     200, json=open_meteo_payload(today - timedelta(days=5), 6)

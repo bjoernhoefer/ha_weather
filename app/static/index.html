@@ -87,7 +87,7 @@
       <h2>Consensus forecast</h2>
       <table>
         <thead>
-          <tr><th>Date</th><th>Min &deg;C</th><th>Max &deg;C</th><th>Precip mm</th><th>Wind</th><th>Condition</th><th>Providers</th></tr>
+          <tr><th>Date</th><th>Min &deg;C</th><th>Max &deg;C</th><th>Precip mm</th><th>Wind</th><th>Condition</th><th>Providers</th><th>ET0 mm</th><th>Water balance mm</th><th>Sunshine h</th><th>Radiation MJ/m&sup2;</th><th>Soil moisture m&sup3;/m&sup3;</th></tr>
         </thead>
         <tbody id="forecast"></tbody>
       </table>
@@ -207,6 +207,11 @@
           cell(row, day.wind_speed_max);
           cell(row, day.condition);
           cell(row, day.provider_count);
+          cell(row, day.evapotranspiration_mm);
+          cell(row, day.water_balance_mm);
+          cell(row, day.sunshine_hours);
+          cell(row, day.radiation_mj_m2);
+          cell(row, day.soil_moisture);
           body.appendChild(row);
         });
       }

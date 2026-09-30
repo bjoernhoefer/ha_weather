@@ -33,6 +33,10 @@ verifies how accurate every source actually was and exposes a
 * **Source control** – every source can be switched on/off globally in the web
   UI, and additional keyless sources (any Open-Meteo weather model) can be
   added and removed at runtime, see [Source control](#source-control).
+* **Garden & energy indicators** – evapotranspiration (ET0), water balance,
+  a `watering_recommended` hint, sunshine hours, solar radiation and soil
+  moisture per day (Open-Meteo, no key), see
+  [docs/home-assistant.md](docs/home-assistant.md#garden-and-energy-sensors).
 * **Weighted consensus forecast** – accurate providers count more.
 * **Accuracy verification** – every forecast is archived in SQLite and compared
   with the measured values of the following days (mean absolute error for
@@ -78,6 +82,7 @@ All settings are environment variables prefixed with `HAW_`
 | `HAW_LOCATIONS` | Vienna + Porto Cristo | JSON list of `{id,name,latitude,longitude,timezone,aemet_municipality}` (`aemet_municipality` = 5 digit INE code, optional, Spain only) |
 | `HAW_FORECAST_DAYS` | `7` | forecast horizon |
 | `HAW_CACHE_TTL_SECONDS` | `1800` | age at which a cached forecast is refetched |
+| `HAW_WATERING_DEFICIT_MM` | `5` | `watering_recommended` turns on when rain − ET0 over 3 days is below −this value |
 | `HAW_DATABASE_PATH` | `data/ha_weather.sqlite3` | forecast/observation archive |
 | `HAW_OPENWEATHERMAP_API_KEY` | – | enables the OpenWeatherMap provider |
 | `HAW_WEATHERAPI_API_KEY` | – | enables the WeatherAPI.com provider |

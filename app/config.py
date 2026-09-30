@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     forecast_days: int = 7
     #: how long a forecast is served from memory before it is refetched
     cache_ttl_seconds: int = 1800
+    #: ``watering_recommended`` turns on when rain minus evapotranspiration of
+    #: today and the next two days is below ``-watering_deficit_mm``
+    watering_deficit_mm: float = Field(default=5.0, ge=0)
 
     # --- locations -----------------------------------------------------
     locations: List[Location] = Field(default_factory=lambda: list(DEFAULT_LOCATIONS))

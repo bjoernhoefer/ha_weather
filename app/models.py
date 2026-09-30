@@ -100,6 +100,12 @@ class AggregatedDay(BaseModel):
     wind_speed_max: Optional[float] = None
     condition: Optional[str] = None
     provider_count: int = 0
+    # garden/energy indicators (Open-Meteo, not part of the consensus)
+    evapotranspiration_mm: Optional[float] = None
+    water_balance_mm: Optional[float] = None
+    sunshine_hours: Optional[float] = None
+    radiation_mj_m2: Optional[float] = None
+    soil_moisture: Optional[float] = None
 
 
 class LocationForecast(BaseModel):

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Callable, Dict, List, Optional
 
 import httpx
 
+from .agro import AgroDay, apply_agro, fetch_agro, watering_state
 from .aggregation import aggregate
 from .azure_foundry import AzureFoundryVerifier
 from .clock import now_utc, today_utc
@@ -251,11 +252,12 @@ class WeatherService:
         location = self.location(location_id)
 
         async with self._client_factory() as client:
-            results = await asyncio.gather(
+            agro, *results = await asyncio.gather(
+                fetch_agro(client, self.settings, location),
                 *(
                     provider.fetch(client, location)
                     for provider in self.providers_for(location)
-                )
+                ),
             )
             try:
                 observations = await fetch_observations(client, self.settings, location)
@@ -268,16 +270,20 @@ class WeatherService:
             self.storage.save_forecast(forecast)
         self.storage.save_observations(observations)
 
-        forecast = self._build(location, forecasts)
+        forecast = self._build(location, forecasts, agro)
         self._cache[location_id] = forecast
         return forecast
 
     def _build(
-        self, location: Location, forecasts: List[ProviderForecast]
+        self,
+        location: Location,
+        forecasts: List[ProviderForecast],
+        agro: Optional[Dict[date, AgroDay]] = None,
     ) -> LocationForecast:
         scores = self.scores(location.id)
         ranking = build_ranking(location.id, scores)
         days = aggregate(forecasts, provider_weights(scores))
+        apply_agro(days, agro or {})
         season = build_season_info(today_utc(), location.latitude, days)
         return LocationForecast(
             location_id=location.id,
@@ -351,6 +357,12 @@ class WeatherService:
             "wind_speed_max": today.wind_speed_max if today else None,
             "condition": today.condition if today else None,
             "provider_count": today.provider_count if today else 0,
+            "evapotranspiration_mm": today.evapotranspiration_mm if today else None,
+            "water_balance_mm": today.water_balance_mm if today else None,
+            "sunshine_hours": today.sunshine_hours if today else None,
+            "radiation_mj_m2": today.radiation_mj_m2 if today else None,
+            "soil_moisture": today.soil_moisture if today else None,
+            **watering_state(forecast.days, self.settings.watering_deficit_mm),
             "upcoming_weather_change": season.upcoming_weather_change,
             "weather_change_reason": season.weather_change_reason,
             "weather_change_date": season.weather_change_date,

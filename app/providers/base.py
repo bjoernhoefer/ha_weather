@@ -32,6 +32,10 @@ class WeatherProvider(abc.ABC):
         """Providers without their (optional) credentials are skipped."""
         return True
 
+    def supports(self, location: Location) -> bool:
+        """Regional sources only cover some locations."""
+        return True
+
     @abc.abstractmethod
     async def _fetch(
         self, client: httpx.AsyncClient, location: Location

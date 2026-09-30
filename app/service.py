@@ -164,9 +164,14 @@ class WeatherService:
             raise UnknownLocationError(location_id)
         return location
 
+    def providers_for(self, location: Location) -> List[WeatherProvider]:
+        """Active providers that cover ``location``."""
+        return [p for p in self.providers if p.supports(location)]
+
     def scores(self, location_id: str) -> List[ProviderScore]:
         overrides = self.storage.overrides(location_id)
-        known = {provider.name for provider in self.providers}
+        location = self.location(location_id)
+        known = {provider.name for provider in self.providers_for(location)}
         scores = [
             score
             for score in compute_scores(location_id, self.storage, overrides=overrides)
@@ -196,7 +201,10 @@ class WeatherService:
 
         async with self._client_factory() as client:
             results = await asyncio.gather(
-                *(provider.fetch(client, location) for provider in self.providers)
+                *(
+                    provider.fetch(client, location)
+                    for provider in self.providers_for(location)
+                )
             )
             try:
                 observations = await fetch_observations(client, self.settings, location)

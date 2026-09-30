@@ -86,6 +86,21 @@
 
     <section>
       <h2>Consensus forecast</h2>
+      <h3>Next 24 hours (updated hourly)</h3>
+      <table>
+        <thead>
+          <tr><th>Time</th><th>Temperature &deg;C</th><th>Precip mm</th><th>Wind</th><th>Condition</th><th>Providers</th></tr>
+        </thead>
+        <tbody id="hourlyForecast"></tbody>
+      </table>
+      <h3>Next 48 hours (4-hour intervals)</h3>
+      <table>
+        <thead>
+          <tr><th>Time</th><th>Temperature &deg;C</th><th>Precip mm</th><th>Wind</th><th>Condition</th><th>Providers</th></tr>
+        </thead>
+        <tbody id="fourHourlyForecast"></tbody>
+      </table>
+      <h3>Days 3–7</h3>
       <table>
         <thead>
           <tr><th>Date</th><th>Min &deg;C</th><th>Max &deg;C</th><th>Precip mm</th><th>Wind</th><th>Condition</th><th>Providers</th><th>ET0 mm</th><th>Water balance mm</th><th>Sunshine h</th><th>Radiation MJ/m&sup2;</th><th>Soil moisture m&sup3;/m&sup3;</th></tr>
@@ -199,7 +214,7 @@
       function renderForecast(days) {
         const body = $("forecast");
         body.textContent = "";
-        days.forEach((day) => {
+        days.slice(2, 7).forEach((day) => {
           const row = document.createElement("tr");
           cell(row, day.target_date);
           cell(row, day.temperature_min);
@@ -213,6 +228,21 @@
           cell(row, day.sunshine_hours);
           cell(row, day.radiation_mj_m2);
           cell(row, day.soil_moisture);
+          body.appendChild(row);
+        });
+      }
+
+      function renderShortForecast(items, targetId) {
+        const body = $(targetId);
+        body.textContent = "";
+        items.forEach((item) => {
+          const row = document.createElement("tr");
+          cell(row, new Date(item.target_time).toLocaleString());
+          cell(row, item.temperature);
+          cell(row, item.precipitation_mm);
+          cell(row, item.wind_speed);
+          cell(row, item.condition);
+          cell(row, item.provider_count);
           body.appendChild(row);
         });
       }
@@ -347,6 +377,8 @@
           renderRanking(locationId, forecast.ranking);
           renderSeason(forecast.season);
           renderForecast(forecast.days);
+          renderShortForecast(forecast.hourly, "hourlyForecast");
+          renderShortForecast(forecast.four_hourly, "fourHourlyForecast");
           setStatus(`Updated ${new Date(forecast.generated_at).toLocaleString()}`);
         } catch (error) { setStatus(error.message); }
       }
@@ -378,6 +410,7 @@
         } catch (error) { setStatus(error.message); }
       });
 
+      setInterval(() => load(false), 60 * 60 * 1000);
       init();
     </script>
   </body>

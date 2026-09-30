@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, datetime
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 import httpx
 
 from ..config import Location
-from ..models import DailyForecast
+from ..models import DailyForecast, HourlyForecast
 from .base import WeatherProvider, register
 from .conditions import condition_from_wmo
 
@@ -17,6 +18,7 @@ DAILY_VARIABLES = (
     "temperature_2m_max,temperature_2m_min,precipitation_sum,"
     "wind_speed_10m_max,weather_code"
 )
+HOURLY_VARIABLES = "temperature_2m,precipitation,wind_speed_10m,weather_code"
 
 
 def parse_open_meteo_daily(payload: dict) -> List[DailyForecast]:
@@ -47,6 +49,37 @@ def parse_open_meteo_daily(payload: dict) -> List[DailyForecast]:
             )
         )
     return days
+
+
+def parse_open_meteo_hourly(
+    payload: dict, timezone_name: str = "UTC"
+) -> List[HourlyForecast]:
+    """Convert Open-Meteo's local-time hourly block into typed values."""
+    hourly = payload.get("hourly") or {}
+    times = hourly.get("time") or []
+    try:
+        timezone = ZoneInfo(timezone_name)
+    except Exception:  # noqa: BLE001 - invalid location timezone falls back to UTC
+        timezone = ZoneInfo("UTC")
+
+    def column(key: str) -> List:
+        values = hourly.get(key) or []
+        return list(values) + [None] * max(0, len(times) - len(values))
+
+    temperatures = column("temperature_2m")
+    precipitation = column("precipitation")
+    wind = column("wind_speed_10m")
+    codes = column("weather_code")
+    return [
+        HourlyForecast(
+            target_time=datetime.fromisoformat(stamp).replace(tzinfo=timezone),
+            temperature=temperatures[index],
+            precipitation_mm=precipitation[index],
+            wind_speed=wind[index],
+            condition=condition_from_wmo(codes[index]),
+        )
+        for index, stamp in enumerate(times)
+    ]
 
 
 OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -97,6 +130,22 @@ class _OpenMeteoBase(WeatherProvider):
         response = await client.get(self.url, params=params)
         response.raise_for_status()
         return parse_open_meteo_daily(response.json())
+
+    async def _fetch_hourly(
+        self, client: httpx.AsyncClient, location: Location
+    ) -> List[HourlyForecast]:
+        params = {
+            "latitude": location.latitude,
+            "longitude": location.longitude,
+            "hourly": HOURLY_VARIABLES,
+            "timezone": location.timezone,
+            "forecast_days": self.settings.forecast_days,
+        }
+        if self.model:
+            params["models"] = self.model
+        response = await client.get(self.url, params=params)
+        response.raise_for_status()
+        return parse_open_meteo_hourly(response.json(), location.timezone)
 
 
 @register

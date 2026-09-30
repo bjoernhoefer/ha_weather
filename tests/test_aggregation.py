@@ -4,8 +4,8 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from app.aggregation import aggregate
-from app.models import DailyForecast, ProviderForecast
+from app.aggregation import aggregate, aggregate_hourly
+from app.models import DailyForecast, HourlyForecast, ProviderForecast
 
 TARGET = date(2026, 5, 1)
 ISSUED = datetime(2026, 4, 30, tzinfo=timezone.utc)
@@ -82,3 +82,26 @@ def test_missing_values_do_not_break_the_average():
 
 def test_empty_input():
     assert aggregate([]) == []
+
+
+def test_hourly_consensus_and_four_hour_buckets():
+    forecast = ProviderForecast(
+        provider="a",
+        location_id="vienna",
+        issued_at=ISSUED,
+        days=[DailyForecast(target_date=TARGET, temperature_max=10.0)],
+        hours=[
+            HourlyForecast(
+                target_time=datetime(2026, 5, 1, hour, tzinfo=timezone.utc),
+                temperature=float(hour),
+                precipitation_mm=1.0,
+            )
+            for hour in range(8)
+        ],
+    )
+    hourly = aggregate_hourly([forecast], horizon_hours=24)
+    assert len(hourly) == 8
+    assert hourly[0].temperature == 0.0
+    four_hourly = aggregate_hourly([forecast], interval_hours=4, horizon_hours=48)
+    assert [item.target_time.hour for item in four_hourly] == [0, 4]
+    assert four_hourly[0].temperature == 1.5

@@ -38,6 +38,7 @@ def test_forecast_endpoint_returns_consensus_and_season(api):
     payload = api.get("/api/forecast/vienna").json()
     assert payload["location_name"] == "Vienna"
     assert payload["days"], "expected aggregated days"
+    assert "hourly" in payload and "four_hourly" in payload
     assert payload["days"][0]["provider_count"] >= 2
     assert payload["season"]["weather_season_to"]
     assert payload["ranking"]["top"]
@@ -101,6 +102,8 @@ def test_home_assistant_state_exposes_the_sensors(api):
         "sunshine_hours",
         "radiation_mj_m2",
         "soil_moisture",
+        "hourly",
+        "four_hourly",
     ):
         assert key in payload
     assert payload["forecast"]

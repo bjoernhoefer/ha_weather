@@ -19,6 +19,16 @@ class DailyForecast(BaseModel):
     condition: Optional[str] = None
 
 
+class HourlyForecast(BaseModel):
+    """One hourly forecast value from a provider."""
+
+    target_time: datetime
+    temperature: Optional[float] = None
+    precipitation_mm: Optional[float] = None
+    wind_speed: Optional[float] = None
+    condition: Optional[str] = None
+
+
 class ProviderForecast(BaseModel):
     """The full forecast a provider returned for one location."""
 
@@ -26,6 +36,7 @@ class ProviderForecast(BaseModel):
     location_id: str
     issued_at: datetime
     days: List[DailyForecast] = Field(default_factory=list)
+    hours: List[HourlyForecast] = Field(default_factory=list)
     error: Optional[str] = None
 
     @property
@@ -108,6 +119,17 @@ class AggregatedDay(BaseModel):
     soil_moisture: Optional[float] = None
 
 
+class AggregatedHour(BaseModel):
+    """Weighted hourly consensus value."""
+
+    target_time: datetime
+    temperature: Optional[float] = None
+    precipitation_mm: Optional[float] = None
+    wind_speed: Optional[float] = None
+    condition: Optional[str] = None
+    provider_count: int = 0
+
+
 class LocationForecast(BaseModel):
     """Everything Home Assistant needs for one location."""
 
@@ -115,6 +137,8 @@ class LocationForecast(BaseModel):
     location_name: str
     generated_at: datetime
     days: List[AggregatedDay] = Field(default_factory=list)
+    hourly: List[AggregatedHour] = Field(default_factory=list)
+    four_hourly: List[AggregatedHour] = Field(default_factory=list)
     providers: List[ProviderForecast] = Field(default_factory=list)
     ranking: Optional[ProviderRanking] = None
     season: Optional[SeasonInfo] = None

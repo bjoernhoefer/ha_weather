@@ -10,7 +10,7 @@ from typing import Callable, Dict, List, Optional
 import httpx
 
 from .agro import AgroDay, apply_agro, fetch_agro, watering_state
-from .aggregation import aggregate
+from .aggregation import aggregate, aggregate_hourly
 from .azure_foundry import AzureFoundryVerifier
 from .clock import now_utc, today_utc
 from .config import Location, Settings
@@ -282,7 +282,12 @@ class WeatherService:
     ) -> LocationForecast:
         scores = self.scores(location.id)
         ranking = build_ranking(location.id, scores)
-        days = aggregate(forecasts, provider_weights(scores))
+        weights = provider_weights(scores)
+        days = aggregate(forecasts, weights)
+        hourly = aggregate_hourly(forecasts, weights, interval_hours=1, horizon_hours=24)
+        four_hourly = aggregate_hourly(
+            forecasts, weights, interval_hours=4, horizon_hours=48
+        )
         apply_agro(days, agro or {})
         season = build_season_info(today_utc(), location.latitude, days)
         return LocationForecast(
@@ -290,6 +295,8 @@ class WeatherService:
             location_name=location.name,
             generated_at=now_utc(),
             days=days,
+            hourly=hourly,
+            four_hourly=four_hourly,
             providers=forecasts,
             ranking=ranking,
             season=season,
@@ -374,4 +381,8 @@ class WeatherService:
             "top_provider": ranking.top[0].provider if ranking and ranking.top else None,
             "low_provider": ranking.low[-1].provider if ranking and ranking.low else None,
             "forecast": [day.model_dump(mode="json") for day in forecast.days],
+            "hourly": [hour.model_dump(mode="json") for hour in forecast.hourly],
+            "four_hourly": [
+                hour.model_dump(mode="json") for hour in forecast.four_hourly
+            ],
         }

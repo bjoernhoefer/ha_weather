@@ -61,6 +61,9 @@ class VerificationParams:
     building_delta: float = 20.0
     #: cloud tops colder than this (°C) are deep convection
     convective_cloud_top: float = -40.0
+    #: storms are short lived: this many convective readings among the last
+    #: ``confirmations`` readings are enough
+    convective_confirmations: int = 2
     #: rain gauge sum in the window that counts as "it rained"
     gauge_rain_mm: float = 0.2
     drift_low: float = 3.0
@@ -274,7 +277,7 @@ def classify(
     last_convective = usable[-params.confirmations :]
     confirmed_convective = (
         sum(1 for reading in last_convective if _is_convective(reading, params))
-        >= min(2, params.confirmations)
+        >= min(params.convective_confirmations, params.confirmations)
     )
 
     # --- rain gauge / thermometer ------------------------------------

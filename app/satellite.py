@@ -14,6 +14,7 @@ Two sources are supported, both optional:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -222,9 +223,9 @@ def sample_points(
 def scene_time(now: datetime, interval_minutes: int, lag_minutes: int) -> datetime:
     """Time of the newest published scene (``now - lag`` on the product grid)."""
     moment = now - timedelta(minutes=lag_minutes)
-    interval = max(1, interval_minutes)
-    minutes = (moment.hour * 60 + moment.minute) // interval * interval
-    return moment.replace(hour=minutes // 60, minute=minutes % 60, second=0, microsecond=0)
+    step = max(1, interval_minutes) * 60
+    snapped = int(moment.timestamp()) // step * step
+    return datetime.fromtimestamp(snapped, tz=timezone.utc)
 
 
 class EumetsatClient:
@@ -298,32 +299,29 @@ class EumetsatClient:
         headers = await self._headers(client)
         points = sample_points(location, settings.eumetsat_sample_offset_deg)
 
-        cloudy: List[bool] = []
-        for latitude, longitude in points:
-            state = classify_cloud_mask(
-                await self._feature_info(
-                    client, settings.eumetsat_cloud_layer, latitude, longitude, headers
+        async def query(layer: str) -> List[Optional[Dict[str, float]]]:
+            return list(
+                await asyncio.gather(
+                    *(
+                        self._feature_info(client, layer, latitude, longitude, headers)
+                        for latitude, longitude in points
+                    )
                 )
             )
-            if state is not None:
-                cloudy.append(state)
+
+        cloudy = [
+            state
+            for state in map(
+                classify_cloud_mask, await query(settings.eumetsat_cloud_layer)
+            )
+            if state is not None
+        ]
 
         convective: Optional[bool] = None
         if settings.eumetsat_lightning_layer:
             try:
-                flashes = [
-                    classify_lightning(
-                        await self._feature_info(
-                            client,
-                            settings.eumetsat_lightning_layer,
-                            latitude,
-                            longitude,
-                            headers,
-                        )
-                    )
-                    for latitude, longitude in points
-                ]
-                convective = any(flashes)
+                flashes = await query(settings.eumetsat_lightning_layer)
+                convective = any(classify_lightning(values) for values in flashes)
             except httpx.HTTPError as exc:
                 LOGGER.warning("EUMETSAT lightning query failed: %s", exc)
 

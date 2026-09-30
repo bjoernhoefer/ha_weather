@@ -246,3 +246,15 @@ async def test_eumetsat_is_queried_once_per_scene(settings, storage, today):
     readings = storage.satellite_readings("vienna", now_utc() - timedelta(hours=1))
     assert readings[0].cloud_cover == 100.0
     assert readings[0].convective is True  # non zero lightning pixels
+
+
+async def test_homeassistant_payload_survives_a_failing_live_check(service, monkeypatch):
+    async def boom(location_id):
+        raise RuntimeError("satellite on fire")
+
+    monkeypatch.setattr(service, "live_check", boom)
+    payload = await service.home_assistant_state("vienna")
+    assert payload["forecast_failure"] is False
+    assert payload["watering_impact"] == "none"
+    assert "live check failed" in payload["failure_reason"]
+    assert payload["temperature_max"] is not None

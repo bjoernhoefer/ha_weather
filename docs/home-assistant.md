@@ -91,7 +91,9 @@ automation:
 Push the local thermometer (and rain gauge, if available) every few minutes.
 `precipitation_mm` is the rain **since the last push**, not the daily total.
 Reporting the adjustments your automations applied (0 = unchanged,
-1 = fully reduced) makes the impact exact; otherwise it is estimated.
+1 = fully reduced, values are clamped to this range) makes the impact exact;
+otherwise it is estimated. The example assumes 20 minutes is the normal
+watering time.
 Details: [forecast-verification.md](forecast-verification.md).
 
 ```yaml
@@ -106,7 +108,7 @@ rest_command:
       {"temperature": {{ states('sensor.garden_temperature') | float(0) }},
        "precipitation_mm": {{ states('sensor.rain_last_5_minutes') | float(0) }},
        "adjustments": {
-         "garden_watering": {{ 1 - (states('input_number.garden_watering_minutes') | float(0) / 20) }},
+         "garden_watering": {{ [0, [1, 1 - (states('input_number.garden_watering_minutes') | float(20)) / 20] | min] | max }},
          "heating": {{ states('input_number.heating_reduction') | float(0) }}}}
 
 automation:

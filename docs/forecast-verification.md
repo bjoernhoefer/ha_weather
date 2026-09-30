@@ -86,6 +86,8 @@ not hide a wrong forecast.
 | `temperature_drift` | corrected thermometer ≥ 3 K / 5 K / 8 K off the forecast in all recent readings | low / medium / high |
 
 * A failure needs `HAW_LIVE_CHECK_CONFIRMATIONS` (3) readings in a row.
+  Thunderstorms are short lived, so 2 convective readings (lightning or
+  cloud tops below −40 °C) among those last readings are enough.
 * A raised failure is kept for `HAW_LIVE_CHECK_HOLD_MINUTES` (120) after it was
   last seen (`held: true`) so the flag does not flap on a single cloud.
 * `confidence` (0..1) drops when the satellite or thermometer is missing or

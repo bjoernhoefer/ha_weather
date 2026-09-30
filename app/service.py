@@ -250,16 +250,16 @@ class WeatherService:
                     settings.eumetsat_interval_minutes,
                     settings.eumetsat_lag_minutes,
                 )
-                if self.storage.satellite_readings(
+                already_queried = self.storage.satellite_readings(
                     location.id, newest_scene, source=EUMETSAT_SOURCE
-                ):
-                    return  # this scene was already queried
-                try:
-                    self.storage.save_satellite_readings(
-                        await self.eumetsat.fetch(client, location)
-                    )
-                except Exception as exc:  # noqa: BLE001 - source is optional
-                    LOGGER.warning("EUMETSAT failed for %s: %s", location.id, exc)
+                )
+                if not already_queried:
+                    try:
+                        self.storage.save_satellite_readings(
+                            await self.eumetsat.fetch(client, location)
+                        )
+                    except Exception as exc:  # noqa: BLE001 - source is optional
+                        LOGGER.warning("EUMETSAT failed for %s: %s", location.id, exc)
 
     def _temperature_offset(
         self,
@@ -451,8 +451,18 @@ class WeatherService:
         )
         today = forecast.days[0] if forecast.days else None
         ranking = forecast.ranking
-        check = await self.live_check(location_id)
-        impacts = {}
+        try:
+            check = await self.live_check(location_id)
+        except Exception as exc:  # noqa: BLE001 - never break the main sensors
+            LOGGER.warning("live check failed for %s: %s", location_id, exc)
+            check = LiveCheckResult(
+                location_id=location_id,
+                generated_at=now_utc(),
+                failure_reason=f"live check failed: {type(exc).__name__}",
+            )
+        impacts = {
+            profile.payload_key: "none" for profile in self.settings.consumers
+        }
         for impact in check.impacts:
             impacts[impact.payload_key] = impact.impact
             impacts[f"{impact.payload_key}_score"] = impact.score

@@ -70,20 +70,24 @@ def mock_transport(today: date) -> httpx.MockTransport:
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
-        if "api.met.no" in url:
+        host = request.url.host
+        if host == "api.met.no":
             return httpx.Response(200, json=met_no_payload(today))
-        if "openweathermap" in url:
+        if host == "api.openweathermap.org":
             return httpx.Response(404, json={"message": "no api key"})
-        if "weatherapi.com" in url:
+        if host == "api.weatherapi.com":
             return httpx.Response(404, json={"error": "no api key"})
-        if "open-meteo" in url:
-            if "past_days" in url:
+        if host == "api.open-meteo.com":
+            if "past_days" in request.url.params:
                 return httpx.Response(
                     200, json=open_meteo_payload(today - timedelta(days=5), 6)
                 )
-            offset = 1.0 if "dwd-icon" in url else (2.0 if "/gfs" in url else 0.0)
+            path = request.url.path
+            offset = 1.0 if path.endswith("/dwd-icon") else (
+                2.0 if path.endswith("/gfs") else 0.0
+            )
             return httpx.Response(200, json=open_meteo_payload(today, 7, offset))
-        if "openai/deployments" in url:
+        if request.url.path.startswith("/openai/deployments"):
             return httpx.Response(
                 200,
                 json={

@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     database_path: str = "data/ha_weather.sqlite3"
     request_timeout_seconds: float = 15.0
     forecast_days: int = 7
+    #: how long a forecast is served from memory before it is refetched
+    cache_ttl_seconds: int = 1800
 
     # --- locations -----------------------------------------------------
     locations: List[Location] = Field(default_factory=lambda: list(DEFAULT_LOCATIONS))

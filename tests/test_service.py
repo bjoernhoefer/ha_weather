@@ -50,6 +50,16 @@ async def test_forecast_is_cached_until_refreshed(service):
     assert third.generated_at >= first.generated_at
 
 
+async def test_cached_forecast_expires_after_the_ttl(settings, storage, client_factory):
+    from app.service import WeatherService
+
+    short_ttl = settings.model_copy(update={"cache_ttl_seconds": 0})
+    service = WeatherService(short_ttl, storage, client_factory=client_factory)
+    first = await service.forecast("vienna")
+    second = await service.forecast("vienna")
+    assert second.generated_at > first.generated_at
+
+
 async def test_unknown_location_raises(service):
     with pytest.raises(UnknownLocationError):
         await service.forecast("atlantis")

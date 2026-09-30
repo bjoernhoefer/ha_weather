@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Dict, List, Optional
 
 import httpx
@@ -130,9 +130,16 @@ class WeatherService:
         """Return the cached forecast, refreshing it when needed."""
         self.location(location_id)
         cached = self._cache.get(location_id)
-        if refresh or cached is None:
+        if refresh or cached is None or self._is_stale(cached):
             return await self.refresh(location_id)
         return cached
+
+    def _is_stale(self, forecast: LocationForecast) -> bool:
+        ttl = self.settings.cache_ttl_seconds
+        if ttl <= 0:
+            return True
+        age = datetime.now(timezone.utc) - forecast.generated_at
+        return age > timedelta(seconds=ttl)
 
     async def verify(self, location_id: str) -> VerificationResult:
         location = self.location(location_id)

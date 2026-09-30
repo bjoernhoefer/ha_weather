@@ -56,8 +56,9 @@ def create_app(
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         yield
-        storage: Storage = application.state.storage
-        storage.close()
+        # only close the storage when this factory created it
+        if application.state.owns_storage:
+            application.state.storage.close()
 
     app = FastAPI(
         title="ha_weather",
@@ -68,9 +69,10 @@ def create_app(
         ),
         lifespan=lifespan,
     )
+    owns_storage = service is None
     if service is None:
-        storage = Storage(settings.database_path)
-        service = WeatherService(settings, storage)
+        service = WeatherService(settings, Storage(settings.database_path))
+    app.state.owns_storage = owns_storage
     app.state.settings = settings
     app.state.service = service
     app.state.storage = service.storage

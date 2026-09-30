@@ -64,6 +64,7 @@ All settings are environment variables prefixed with `HAW_`
 | `HAW_API_KEYS` | – | comma separated keys, mandatory in `public` mode |
 | `HAW_LOCATIONS` | Vienna + Porto Cristo | JSON list of `{id,name,latitude,longitude,timezone}` |
 | `HAW_FORECAST_DAYS` | `7` | forecast horizon |
+| `HAW_CACHE_TTL_SECONDS` | `1800` | age at which a cached forecast is refetched |
 | `HAW_DATABASE_PATH` | `data/ha_weather.sqlite3` | forecast/observation archive |
 | `HAW_OPENWEATHERMAP_API_KEY` | – | enables the OpenWeatherMap provider |
 | `HAW_WEATHERAPI_API_KEY` | – | enables the WeatherAPI.com provider |

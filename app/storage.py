@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 from .models import Observation, ProviderForecast, ProviderOverride
@@ -230,7 +230,7 @@ class Storage:
     # ------------------------------------------------------------------
     def purge_older_than(self, days: int) -> int:
         """Housekeeping: drop forecasts/observations older than ``days``."""
-        cutoff = (datetime.now().date() - timedelta(days=days)).isoformat()
+        cutoff = (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
         with self._lock:
             removed = self._connection.execute(
                 "DELETE FROM forecasts WHERE target_date < ?", (cutoff,)

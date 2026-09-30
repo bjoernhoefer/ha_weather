@@ -51,5 +51,5 @@ async def require_api_key(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing or invalid API key",
-            headers={"WWW-Authenticate": API_KEY_HEADER},
+            headers={"WWW-Authenticate": "Bearer"},
         )

@@ -24,9 +24,7 @@ def parse_openweathermap(payload: dict) -> List[DailyForecast]:
     conditions: Dict = {}
 
     for entry in payload.get("list") or []:
-        stamp = datetime.fromtimestamp(entry["dt"], tz=timezone.utc)
-        local = stamp.timestamp() + offset
-        local_dt = datetime.fromtimestamp(local, tz=timezone.utc)
+        local_dt = datetime.fromtimestamp(entry["dt"] + offset, tz=timezone.utc)
         day = local_dt.date()
 
         main = entry.get("main") or {}

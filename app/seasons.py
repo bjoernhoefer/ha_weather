@@ -23,7 +23,7 @@ NORTHERN_SEASONS: Tuple[Tuple[int, str], ...] = (
     (9, "autumn"),
     (12, "winter"),
 )
-SOUTHERN_OFFSET = {"spring": "autumn", "summer": "winter", "autumn": "spring", "winter": "summer"}
+NORTHERN_TO_SOUTHERN = {"spring": "autumn", "summer": "winter", "autumn": "spring", "winter": "summer"}
 
 #: A season change closer than this many days flips ``weather_seasonal_change``.
 SEASON_CHANGE_HORIZON_DAYS = 14
@@ -49,7 +49,7 @@ def _northern_season(day: date) -> str:
 def season_for(day: date, hemisphere: str = "northern") -> str:
     season = _northern_season(day)
     if hemisphere == "southern":
-        return SOUTHERN_OFFSET[season]
+        return NORTHERN_TO_SOUTHERN[season]
     return season
 
 

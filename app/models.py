@@ -147,3 +147,6 @@ class SourceInfo(BaseModel):
     available: bool
     custom: bool = False
     model: Optional[str] = None
+    #: where the API key comes from: ``"ui"``, ``"environment"`` or ``None``.
+    #: The key itself is never returned.
+    api_key_origin: Optional[str] = None

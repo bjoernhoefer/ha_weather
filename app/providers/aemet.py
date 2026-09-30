@@ -139,6 +139,7 @@ class AemetProvider(WeatherProvider):
         "AEMET OpenData municipality forecast, Spain (free registration required)"
     )
     requires_api_key = True
+    api_key_setting = "aemet_api_key"
     url = API_URL
 
     def is_available(self) -> bool:

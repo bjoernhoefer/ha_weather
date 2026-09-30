@@ -98,6 +98,8 @@ Providers whose (free) API key is missing are simply skipped.
 | `POST /api/sources` | add a custom source `{"name": "icon_d2", "model": "icon_d2", "description": ""}` |
 | `PUT /api/sources/{name}` | switch a source on/off for all locations `{"enabled": false}` |
 | `DELETE /api/sources/{name}` | remove a custom source (built-in sources can only be disabled) |
+| `PUT /api/sources/{name}/api-key` | set/replace the API key of a source `{"api_key": "..."}` – the key is never returned |
+| `DELETE /api/sources/{name}/api-key` | remove the key set in the UI (the environment key applies again) |
 | `GET /api/forecast/{location}` | consensus + per provider forecast, ranking and season |
 | `POST /api/forecast/{location}/refresh` | force a new query of all providers |
 | `GET /api/ranking/{location}` | Top/Low provider list |
@@ -141,9 +143,25 @@ go to `api.open-meteo.com`, arbitrary URLs cannot be configured.
 | Tomorrow.io, Visual Crossing, Pirate Weather, Meteoblue, AccuWeather | free key | possible future providers, require registration |
 | `openweathermap`, `weatherapi` | free key | already supported |
 
+### API keys in the web UI
+
+Sources that need a key (`aemet`, `openweathermap`, `weatherapi`) have a key
+field in the **Source control** table, so a key can be added or replaced
+without a restart:
+
+* A key entered in the UI overrides the environment variable. *Remove key*
+  deletes it and the environment variable applies again.
+* The key column shows only where the key comes from (`set in web UI`,
+  `from environment` or `missing`). The API never returns a key.
+* UI keys are stored in plain text in the SQLite database
+  (`HAW_DATABASE_PATH`). Protect the data volume. In `local` mode everyone in
+  the subnet can *replace* keys (but not read them), so use `public` mode if
+  that's a concern.
+
 ### AEMET (Porto Cristo)
 
-* Set `HAW_AEMET_API_KEY`. The key is sent as `api_key` header, never in the URL.
+* Enter the key in the web UI (**Source control → API key → Save key**) or
+  set `HAW_AEMET_API_KEY`. The key is sent as `api_key` header, never in the URL.
 * Porto Cristo belongs to the municipality of **Manacor**, INE code `07033`
   (preconfigured). Other Spanish locations need their own
   `aemet_municipality` in `HAW_LOCATIONS`.
@@ -151,10 +169,14 @@ go to `api.open-meteo.com`, arbitrary URLs cannot be configured.
   AEMET publishes daily precipitation only as a *probability*, so the amount
   in mm is summed from the hourly forecast and is only reported for fully
   covered days (usually the next 1–2 days).
+* Datasets used: `prediccion/especifica/municipio/diaria/{municipality}` and
+  `prediccion/especifica/municipio/horaria/{municipality}`.
 
 ### GeoSphere Austria (Vienna)
 
-* Uses the `nwp-v2-1h-1km` dataset (C-LAEF AlpeAdria, 1 km, hourly, runs every
+* Uses the `timeseries/forecast/nwp-v2-1h-1km` dataset with the parameters
+  `2t` (temperature), `rain`, `sf` (snowfall), `10u`/`10v` (wind) and `tcc`
+  (cloud cover). The model is C-LAEF AlpeAdria (1 km, hourly, runs every
   3 h). The older `nwp-v1-1h-2500m` dataset is shut down by GeoSphere on
   4 Nov 2026 and therefore not used.
 * The model runs only 60 h ahead, so GeoSphere contributes to the next ~2

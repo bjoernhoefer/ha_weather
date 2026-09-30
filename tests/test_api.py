@@ -233,3 +233,102 @@ def test_custom_source_cannot_replace_or_delete_builtin(api):
 )
 def test_custom_source_input_is_validated(api, payload):
     assert api.post("/api/sources", json=payload).status_code == 422
+
+
+def test_api_key_can_be_set_and_removed_in_the_ui(api):
+    sources = {item["name"]: item for item in api.get("/api/sources").json()}
+    assert sources["aemet"]["api_key_origin"] is None
+    assert sources["aemet"]["configured"] is False
+
+    response = api.put("/api/sources/aemet/api-key", json={"api_key": " aemet-key "})
+    assert response.status_code == 200
+    assert "aemet-key" not in response.text  # the key is never returned
+    aemet = {item["name"]: item for item in response.json()}["aemet"]
+    assert aemet["api_key_origin"] == "ui"
+    assert aemet["configured"] is True and aemet["available"] is True
+    assert "aemet-key" not in api.get("/api/sources").text
+
+    removed = {
+        item["name"]: item
+        for item in api.delete("/api/sources/aemet/api-key").json()
+    }["aemet"]
+    assert removed["api_key_origin"] is None
+    assert removed["available"] is False
+
+
+def test_ui_api_key_overrides_the_environment(tmp_path, client_factory):
+    from .conftest import PORTO_CRISTO
+
+    settings = Settings(
+        database_path=str(tmp_path / "keys.sqlite3"),
+        locations=[PORTO_CRISTO],
+        aemet_api_key="outdated",
+    )
+    storage = Storage(settings.database_path)
+    service = WeatherService(settings, storage, client_factory=client_factory)
+    with TestClient(create_app(settings, service)) as client:
+        sources = {item["name"]: item for item in client.get("/api/sources").json()}
+        assert sources["aemet"]["api_key_origin"] == "environment"
+        aemet = [
+            p for p in client.get("/api/forecast/porto_cristo").json()["providers"]
+            if p["provider"] == "aemet"
+        ][0]
+        assert aemet["error"]  # the mocked AEMET rejects the outdated key
+
+        client.put("/api/sources/aemet/api-key", json={"api_key": "aemet-key"})
+        aemet = [
+            p for p in client.get("/api/forecast/porto_cristo").json()["providers"]
+            if p["provider"] == "aemet"
+        ][0]
+        assert aemet["error"] is None and aemet["days"]
+
+        # removing the UI key falls back to the environment key
+        fallback = {
+            item["name"]: item
+            for item in client.delete("/api/sources/aemet/api-key").json()
+        }["aemet"]
+        assert fallback["api_key_origin"] == "environment"
+    storage.close()
+
+
+def test_api_key_is_persisted(tmp_path, client_factory):
+    settings = Settings(database_path=str(tmp_path / "persist.sqlite3"))
+    storage = Storage(settings.database_path)
+    WeatherService(settings, storage).set_api_key("aemet", "aemet-key")
+    storage.close()
+
+    storage = Storage(settings.database_path)
+    service = WeatherService(settings, storage, client_factory=client_factory)
+    assert "aemet" in {provider.name for provider in service.providers}
+    storage.close()
+
+
+def test_api_key_validation(api):
+    assert api.put("/api/sources/nope/api-key", json={"api_key": "x"}).status_code == 404
+    assert api.put("/api/sources/met_no/api-key", json={"api_key": "x"}).status_code == 400
+    assert api.delete("/api/sources/met_no/api-key").status_code == 400
+    for bad in ("", "   ", "with space", "line\nbreak", "x" * 600):
+        assert (
+            api.put("/api/sources/aemet/api-key", json={"api_key": bad}).status_code
+            == 422
+        ), bad
+
+
+def test_api_key_requires_authentication_in_public_mode(tmp_path, client_factory):
+    settings = Settings(
+        deployment_mode="public",
+        api_keys=["s3cret"],
+        database_path=str(tmp_path / "public3.sqlite3"),
+    )
+    storage = Storage(settings.database_path)
+    service = WeatherService(settings, storage, client_factory=client_factory)
+    with TestClient(create_app(settings, service)) as client:
+        body = {"api_key": "aemet-key"}
+        assert client.put("/api/sources/aemet/api-key", json=body).status_code == 401
+        assert (
+            client.put(
+                "/api/sources/aemet/api-key", json=body, headers={"X-API-Key": "s3cret"}
+            ).status_code
+            == 200
+        )
+    storage.close()

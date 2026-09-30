@@ -10,7 +10,7 @@ from typing import List, Optional
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from .auth import require_api_key
 from .config import Location, Settings, get_settings
@@ -25,6 +25,7 @@ from .models import (
 )
 from .providers.open_meteo import OPEN_METEO_MODEL_CATALOG
 from .service import (
+    ApiKeyNotSupportedError,
     SourceConflictError,
     UnknownLocationError,
     UnknownSourceError,
@@ -55,6 +56,20 @@ class SourceSwitch(BaseModel):
     """Body of the global enable/disable switch of the source control."""
 
     enabled: bool
+
+
+class ApiKeyRequest(BaseModel):
+    """Body of the API key update, the key is never sent back."""
+
+    api_key: str = Field(min_length=1, max_length=512)
+
+    @field_validator("api_key")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        value = value.strip()
+        if not value or any(ord(char) < 33 or ord(char) == 127 for char in value):
+            raise ValueError("API key must not be empty or contain whitespace")
+        return value
 
 
 class CatalogEntry(BaseModel):
@@ -176,6 +191,40 @@ def create_app(
             return service.set_source_enabled(name, body.enabled)
         except UnknownSourceError as exc:
             raise _unknown_source(exc) from exc
+
+    @app.put(
+        "/api/sources/{name}/api-key",
+        response_model=List[SourceInfo],
+        dependencies=protected,
+    )
+    async def set_api_key(
+        name: str, body: ApiKeyRequest, service: WeatherService = Depends(get_service)
+    ) -> List[SourceInfo]:
+        try:
+            return service.set_api_key(name, body.api_key)
+        except UnknownSourceError as exc:
+            raise _unknown_source(exc) from exc
+        except ApiKeyNotSupportedError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
+
+    @app.delete(
+        "/api/sources/{name}/api-key",
+        response_model=List[SourceInfo],
+        dependencies=protected,
+    )
+    async def delete_api_key(
+        name: str, service: WeatherService = Depends(get_service)
+    ) -> List[SourceInfo]:
+        try:
+            return service.delete_api_key(name)
+        except UnknownSourceError as exc:
+            raise _unknown_source(exc) from exc
+        except ApiKeyNotSupportedError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
 
     @app.delete(
         "/api/sources/{name}",

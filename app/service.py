@@ -48,6 +48,10 @@ class SourceConflictError(ValueError):
     """Raised when a custom source would clash with an existing one."""
 
 
+class ApiKeyNotSupportedError(ValueError):
+    """Raised when an API key is set for a source that doesn't use one."""
+
+
 class WeatherService:
     """Everything the API layer needs, free of HTTP concerns."""
 
@@ -83,10 +87,25 @@ class WeatherService:
             )
         return providers
 
+    def provider_settings(self) -> Settings:
+        """Settings with the API keys entered in the web UI applied.
+
+        Keys from the UI win over environment variables, so a key can be
+        rotated without restarting the container.
+        """
+        stored = self.storage.api_keys()
+        update = {}
+        for name, provider_cls in registered_providers().items():
+            if provider_cls.api_key_setting and stored.get(name):
+                update[provider_cls.api_key_setting] = stored[name]
+        return self.settings.model_copy(update=update) if update else self.settings
+
     def reload_providers(self) -> None:
         """Rebuild the active provider list after a source control change."""
         disabled = self.storage.disabled_sources()
-        candidates = build_providers(self.settings) + self._custom_providers()
+        candidates = (
+            build_providers(self.provider_settings()) + self._custom_providers()
+        )
         self.providers = [p for p in candidates if p.name not in disabled]
         self._cache.clear()
 
@@ -98,10 +117,18 @@ class WeatherService:
     def sources(self) -> List[SourceInfo]:
         """All built-in and custom sources with their current state."""
         disabled = self.storage.disabled_sources()
+        stored_keys = self.storage.api_keys()
+        settings = self.provider_settings()
         result: List[SourceInfo] = []
         for name, provider_cls in sorted(registered_providers().items()):
-            configured = provider_cls(self.settings).is_available()
+            configured = provider_cls(settings).is_available()
             enabled = name not in disabled
+            origin = None
+            if provider_cls.api_key_setting:
+                if stored_keys.get(name):
+                    origin = "ui"
+                elif getattr(self.settings, provider_cls.api_key_setting, None):
+                    origin = "environment"
             result.append(
                 SourceInfo(
                     name=name,
@@ -111,6 +138,7 @@ class WeatherService:
                     enabled=enabled,
                     available=configured and enabled,
                     model=getattr(provider_cls, "model", None),
+                    api_key_origin=origin,
                 )
             )
         for provider in self._custom_providers():
@@ -133,6 +161,29 @@ class WeatherService:
         if not self.is_known_source(name):
             raise UnknownSourceError(name)
         self.storage.set_source_enabled(name, enabled)
+        self.reload_providers()
+        return self.sources()
+
+    def _key_provider(self, name: str):
+        provider_cls = registered_providers().get(name)
+        if provider_cls is None:
+            if self.is_known_source(name):
+                raise ApiKeyNotSupportedError(f"'{name}' does not use an API key")
+            raise UnknownSourceError(name)
+        if not provider_cls.api_key_setting:
+            raise ApiKeyNotSupportedError(f"'{name}' does not use an API key")
+        return provider_cls
+
+    def set_api_key(self, name: str, api_key: str) -> List[SourceInfo]:
+        self._key_provider(name)
+        self.storage.set_api_key(name, api_key)
+        self.reload_providers()
+        return self.sources()
+
+    def delete_api_key(self, name: str) -> List[SourceInfo]:
+        """Remove the UI key; an environment key (if any) applies again."""
+        self._key_provider(name)
+        self.storage.delete_api_key(name)
         self.reload_providers()
         return self.sources()
 

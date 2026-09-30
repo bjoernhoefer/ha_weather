@@ -36,6 +36,7 @@ class WeatherApiProvider(WeatherProvider):
     name = "weatherapi"
     description = "WeatherAPI.com daily forecast (free registration required)"
     requires_api_key = True
+    api_key_setting = "weatherapi_api_key"
     url = "https://api.weatherapi.com/v1/forecast.json"
 
     def is_available(self) -> bool:

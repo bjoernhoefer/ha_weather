@@ -56,7 +56,9 @@
       <h2>Source control</h2>
       <p class="muted">
         Switch weather sources on or off for all locations. Sources without an
-        API key can be added as any keyless Open-Meteo weather model.
+        API key can be added as any keyless Open-Meteo weather model. API keys
+        entered here are stored on the server, override the environment
+        variables and are never shown again.
       </p>
       <table>
         <thead>
@@ -209,6 +211,48 @@
         });
       }
 
+      const KEY_ORIGINS = { ui: "set in web UI", environment: "from environment" };
+
+      function apiKeyEditor(source) {
+        const box = document.createElement("div");
+        box.className = "bar";
+        const state = document.createElement("span");
+        state.textContent = KEY_ORIGINS[source.api_key_origin] || "missing";
+        const input = document.createElement("input");
+        input.type = "password";
+        input.autocomplete = "off";
+        input.placeholder = source.api_key_origin ? "new key" : "API key";
+        input.setAttribute("aria-label", `API key for ${source.name}`);
+        const save = document.createElement("button");
+        save.textContent = "Save key";
+        save.addEventListener("click", async () => {
+          if (!input.value.trim()) { setStatus("Please enter an API key."); return; }
+          try {
+            renderSources(await api(`/api/sources/${source.name}/api-key`, {
+              method: "PUT",
+              body: JSON.stringify({ api_key: input.value.trim() }),
+            }));
+            setStatus(`API key for ${source.name} saved.`);
+            await load(true);
+          } catch (error) { setStatus(error.message); }
+        });
+        box.append(state, input, save);
+        if (source.api_key_origin === "ui") {
+          const remove = document.createElement("button");
+          remove.textContent = "Remove key";
+          remove.addEventListener("click", async () => {
+            if (!confirm(`Remove the API key for ${source.name}?`)) return;
+            try {
+              renderSources(await api(`/api/sources/${source.name}/api-key`, { method: "DELETE" }));
+              setStatus(`API key for ${source.name} removed.`);
+              await load();
+            } catch (error) { setStatus(error.message); }
+          });
+          box.appendChild(remove);
+        }
+        return box;
+      }
+
       function renderSources(sources) {
         const body = $("sources");
         body.textContent = "";
@@ -218,7 +262,7 @@
           cell(row, source.description);
           cell(row, source.custom ? "custom" : "built-in");
           cell(row, source.model);
-          cell(row, source.requires_api_key ? (source.configured ? "configured" : "missing") : "not required");
+          cell(row, source.requires_api_key ? apiKeyEditor(source) : "not required");
           cell(row, source.available ? "yes" : "no");
 
           const enabled = document.createElement("input");

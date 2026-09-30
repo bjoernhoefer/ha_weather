@@ -46,6 +46,10 @@ CREATE TABLE IF NOT EXISTS source_settings (
     provider TEXT PRIMARY KEY,
     enabled INTEGER NOT NULL DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS source_api_keys (
+    provider TEXT PRIMARY KEY,
+    api_key TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS custom_sources (
     name TEXT PRIMARY KEY,
     model TEXT NOT NULL,
@@ -259,6 +263,33 @@ class Storage:
                 )
             )
         return {row["provider"] for row in rows}
+
+    def set_api_key(self, provider: str, api_key: str) -> None:
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO source_api_keys (provider, api_key) VALUES (?, ?)
+                ON CONFLICT (provider) DO UPDATE SET api_key=excluded.api_key
+                """,
+                (provider, api_key),
+            )
+            self._connection.commit()
+
+    def delete_api_key(self, provider: str) -> bool:
+        with self._lock:
+            cursor = self._connection.execute(
+                "DELETE FROM source_api_keys WHERE provider = ?", (provider,)
+            )
+            self._connection.commit()
+        return cursor.rowcount > 0
+
+    def api_keys(self) -> Dict[str, str]:
+        """API keys entered in the web UI, by provider name."""
+        with self._lock:
+            rows = list(
+                self._connection.execute("SELECT provider, api_key FROM source_api_keys")
+            )
+        return {row["provider"]: row["api_key"] for row in rows}
 
     def save_custom_source(self, source: CustomSource) -> None:
         with self._lock:

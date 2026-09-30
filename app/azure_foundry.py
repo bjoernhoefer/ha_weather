@@ -55,9 +55,8 @@ def parse_completion(content: str) -> tuple[str, Dict[str, str]]:
     """Parse the model answer, tolerating plain text replies."""
     text = content.strip()
     if text.startswith("```"):
-        text = text.strip("`")
-        if text.lower().startswith("json"):
-            text = text[4:]
+        text = text.strip("`").strip()
+        text = text.removeprefix("json").strip()
     try:
         data = json.loads(text)
     except (ValueError, TypeError):

@@ -10,6 +10,11 @@ from typing import Dict, List, Optional, Tuple
 
 from .models import Observation, ProviderForecast, ProviderOverride
 
+def _today() -> date:
+    """Single source of truth for 'today' (UTC) inside the archive."""
+    return datetime.now(timezone.utc).date()
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS forecasts (
     provider TEXT NOT NULL,
@@ -116,7 +121,7 @@ class Storage:
             "SELECT * FROM forecasts WHERE location_id = ? AND lead_days >= 1"
             " AND target_date < ?"
         )
-        params: List[object] = [location_id, date.today().isoformat()]
+        params: List[object] = [location_id, _today().isoformat()]
         if since is not None:
             query += " AND target_date >= ?"
             params.append(since.isoformat())
@@ -230,7 +235,7 @@ class Storage:
     # ------------------------------------------------------------------
     def purge_older_than(self, days: int) -> int:
         """Housekeeping: drop forecasts/observations older than ``days``."""
-        cutoff = (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
+        cutoff = (_today() - timedelta(days=days)).isoformat()
         with self._lock:
             removed = self._connection.execute(
                 "DELETE FROM forecasts WHERE target_date < ?", (cutoff,)

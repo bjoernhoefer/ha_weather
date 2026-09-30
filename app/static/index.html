@@ -115,11 +115,13 @@
           rank.type = "number";
           rank.min = "1";
           rank.value = entry.manual_rank ?? "";
+          rank.setAttribute("aria-label", `Manual rank for ${entry.provider}`);
           cell(row, rank);
 
           const enabled = document.createElement("input");
           enabled.type = "checkbox";
           enabled.checked = entry.enabled;
+          enabled.setAttribute("aria-label", `Enable ${entry.provider}`);
           cell(row, enabled);
 
           const save = document.createElement("button");

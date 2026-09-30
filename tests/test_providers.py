@@ -111,10 +111,10 @@ def test_condition_mapping():
 
 
 def test_registry_contains_public_and_key_providers():
-    names = registered_providers()
-    assert {"open_meteo", "dwd_icon", "noaa_gfs", "met_no"} <= set(names)
-    assert names["openweathermap"].requires_api_key
-    assert names["weatherapi"].requires_api_key
+    registry = registered_providers()
+    assert {"open_meteo", "dwd_icon", "noaa_gfs", "met_no"} <= set(registry)
+    assert registry["openweathermap"].requires_api_key
+    assert registry["weatherapi"].requires_api_key
 
 
 def test_providers_without_keys_are_skipped(settings):

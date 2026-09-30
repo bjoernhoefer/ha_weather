@@ -48,6 +48,7 @@ class WeatherService:
         self.settings = settings
         self.storage = storage
         self.verifier = AzureFoundryVerifier(settings)
+        self.providers = build_providers(settings)
         self._client_factory = client_factory or self._default_client
         self._cache: Dict[str, LocationForecast] = {}
 
@@ -63,7 +64,7 @@ class WeatherService:
 
     def scores(self, location_id: str) -> List[ProviderScore]:
         overrides = self.storage.overrides(location_id)
-        known = {provider.name for provider in build_providers(self.settings)}
+        known = {provider.name for provider in self.providers}
         scores = compute_scores(location_id, self.storage, overrides=overrides)
         present = {score.provider for score in scores}
         for provider in sorted(known - present):
@@ -86,11 +87,10 @@ class WeatherService:
     async def refresh(self, location_id: str) -> LocationForecast:
         """Query every provider, archive the results and rebuild the forecast."""
         location = self.location(location_id)
-        providers = build_providers(self.settings)
 
         async with self._client_factory() as client:
             results = await asyncio.gather(
-                *(provider.fetch(client, location) for provider in providers)
+                *(provider.fetch(client, location) for provider in self.providers)
             )
             try:
                 observations = await fetch_observations(client, self.settings, location)

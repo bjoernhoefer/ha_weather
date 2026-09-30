@@ -1,0 +1,22 @@
+services:
+  ha_weather:
+    build: .
+    image: ha_weather:latest
+    container_name: ha_weather
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # local = no authentication (private subnet), public = API key required
+      HAW_DEPLOYMENT_MODE: ${HAW_DEPLOYMENT_MODE:-local}
+      HAW_API_KEYS: ${HAW_API_KEYS:-}
+      HAW_OPENWEATHERMAP_API_KEY: ${HAW_OPENWEATHERMAP_API_KEY:-}
+      HAW_WEATHERAPI_API_KEY: ${HAW_WEATHERAPI_API_KEY:-}
+      HAW_AZURE_FOUNDRY_ENDPOINT: ${HAW_AZURE_FOUNDRY_ENDPOINT:-}
+      HAW_AZURE_FOUNDRY_API_KEY: ${HAW_AZURE_FOUNDRY_API_KEY:-}
+      HAW_AZURE_FOUNDRY_DEPLOYMENT: ${HAW_AZURE_FOUNDRY_DEPLOYMENT:-gpt-4o-mini}
+    volumes:
+      - ha_weather_data:/data
+
+volumes:
+  ha_weather_data:

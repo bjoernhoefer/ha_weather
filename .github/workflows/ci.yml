@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build docker image
+        run: docker build -t ha_weather:ci .
+
+      - name: Smoke test the container
+        run: |
+          docker run -d --name ha_weather_ci -p 8080:8080 ha_weather:ci
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/health; then exit 0; fi
+            sleep 2
+          done
+          docker logs ha_weather_ci
+          exit 1
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f ha_weather_ci || true

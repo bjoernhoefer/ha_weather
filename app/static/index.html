@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ha_weather &ndash; provider ranking</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { font-family: system-ui, sans-serif; margin: 0; padding: 1.5rem; }
+      h1 { margin-top: 0; font-size: 1.4rem; }
+      section { margin-bottom: 2rem; }
+      table { border-collapse: collapse; width: 100%; max-width: 70rem; }
+      th, td { border: 1px solid #8884; padding: .4rem .6rem; text-align: left; }
+      th { background: #8881; }
+      .bar { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+      .top { color: #0a7; font-weight: 600; }
+      .low { color: #c40; font-weight: 600; }
+      .muted { opacity: .7; font-size: .9rem; }
+      button { padding: .35rem .7rem; cursor: pointer; }
+      input[type="number"] { width: 5rem; }
+      #status { min-height: 1.2rem; }
+    </style>
+  </head>
+  <body>
+    <h1>ha_weather &ndash; multi source forecast</h1>
+
+    <section class="bar">
+      <label>Location <select id="location"></select></label>
+      <label>API key <input id="apiKey" type="password" placeholder="only for public mode" /></label>
+      <button id="reload">Reload</button>
+      <button id="refresh">Refresh forecast</button>
+      <button id="verify">Verify with Azure AI Foundry</button>
+    </section>
+
+    <p id="status" class="muted"></p>
+
+    <section>
+      <h2>Top / Low providers</h2>
+      <p class="muted">
+        The ranking is calculated from the measured accuracy. Set a manual rank
+        (lower wins) or disable a provider to override it.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>List</th><th>Provider</th><th>Score</th><th>Temp MAE (K)</th>
+            <th>Precip MAE (mm)</th><th>Verified days</th><th>Manual rank</th>
+            <th>Enabled</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="ranking"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Season &amp; weather change</h2>
+      <table><tbody id="season"></tbody></table>
+    </section>
+
+    <section>
+      <h2>Consensus forecast</h2>
+      <table>
+        <thead>
+          <tr><th>Date</th><th>Min &deg;C</th><th>Max &deg;C</th><th>Precip mm</th><th>Wind</th><th>Condition</th><th>Providers</th></tr>
+        </thead>
+        <tbody id="forecast"></tbody>
+      </table>
+    </section>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const apiKeyInput = $("apiKey");
+      apiKeyInput.value = localStorage.getItem("ha_weather_api_key") || "";
+      apiKeyInput.addEventListener("change", () =>
+        localStorage.setItem("ha_weather_api_key", apiKeyInput.value)
+      );
+
+      const setStatus = (text) => { $("status").textContent = text; };
+
+      async function api(path, options = {}) {
+        const headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
+        if (apiKeyInput.value) headers["X-API-Key"] = apiKeyInput.value;
+        const response = await fetch(path, Object.assign({}, options, { headers }));
+        if (!response.ok) {
+          const detail = await response.text();
+          throw new Error(`${response.status}: ${detail}`);
+        }
+        return response.json();
+      }
+
+      function cell(row, value) {
+        const td = document.createElement("td");
+        if (value instanceof Node) td.appendChild(value);
+        else td.textContent = value === null || value === undefined ? "–" : value;
+        row.appendChild(td);
+        return td;
+      }
+
+      function renderRanking(locationId, ranking) {
+        const body = $("ranking");
+        body.textContent = "";
+        const render = (entry, listName) => {
+          const row = document.createElement("tr");
+          const label = document.createElement("span");
+          label.className = listName === "Top" ? "top" : "low";
+          label.textContent = listName;
+          cell(row, label);
+          cell(row, entry.provider);
+          cell(row, entry.score);
+          cell(row, entry.temperature_mae);
+          cell(row, entry.precipitation_mae);
+          cell(row, entry.samples);
+
+          const rank = document.createElement("input");
+          rank.type = "number";
+          rank.min = "1";
+          rank.value = entry.manual_rank ?? "";
+          rank.setAttribute("aria-label", `Manual rank for ${entry.provider}`);
+          cell(row, rank);
+
+          const enabled = document.createElement("input");
+          enabled.type = "checkbox";
+          enabled.checked = entry.enabled;
+          enabled.setAttribute("aria-label", `Enable ${entry.provider}`);
+          cell(row, enabled);
+
+          const save = document.createElement("button");
+          save.textContent = "Save";
+          save.addEventListener("click", async () => {
+            try {
+              const payload = {
+                manual_rank: rank.value === "" ? null : Number(rank.value),
+                enabled: enabled.checked,
+              };
+              const updated = await api(`/api/ranking/${locationId}/${entry.provider}`, {
+                method: "PUT",
+                body: JSON.stringify(payload),
+              });
+              renderRanking(locationId, updated);
+              setStatus(`Saved override for ${entry.provider}.`);
+            } catch (error) { setStatus(error.message); }
+          });
+          const reset = document.createElement("button");
+          reset.textContent = "Reset";
+          reset.addEventListener("click", async () => {
+            try {
+              const updated = await api(`/api/ranking/${locationId}/${entry.provider}`, { method: "DELETE" });
+              renderRanking(locationId, updated);
+              setStatus(`Removed override for ${entry.provider}.`);
+            } catch (error) { setStatus(error.message); }
+          });
+          const actions = document.createElement("td");
+          actions.append(save, reset);
+          row.appendChild(actions);
+          body.appendChild(row);
+        };
+        ranking.top.forEach((entry) => render(entry, "Top"));
+        ranking.low.forEach((entry) => render(entry, "Low"));
+      }
+
+      function renderSeason(season) {
+        const body = $("season");
+        body.textContent = "";
+        Object.entries(season).forEach(([key, value]) => {
+          const row = document.createElement("tr");
+          cell(row, key);
+          cell(row, typeof value === "boolean" ? String(value) : value);
+          body.appendChild(row);
+        });
+      }
+
+      function renderForecast(days) {
+        const body = $("forecast");
+        body.textContent = "";
+        days.forEach((day) => {
+          const row = document.createElement("tr");
+          cell(row, day.target_date);
+          cell(row, day.temperature_min);
+          cell(row, day.temperature_max);
+          cell(row, day.precipitation_mm);
+          cell(row, day.wind_speed_max);
+          cell(row, day.condition);
+          cell(row, day.provider_count);
+          body.appendChild(row);
+        });
+      }
+
+      async function load(refresh = false) {
+        const locationId = $("location").value;
+        if (!locationId) return;
+        setStatus(refresh ? "Querying all providers…" : "Loading…");
+        try {
+          const forecast = refresh
+            ? await api(`/api/forecast/${locationId}/refresh`, { method: "POST" })
+            : await api(`/api/forecast/${locationId}`);
+          renderRanking(locationId, forecast.ranking);
+          renderSeason(forecast.season);
+          renderForecast(forecast.days);
+          setStatus(`Updated ${new Date(forecast.generated_at).toLocaleString()}`);
+        } catch (error) { setStatus(error.message); }
+      }
+
+      async function init() {
+        try {
+          const locations = await api("/api/locations");
+          const select = $("location");
+          select.textContent = "";
+          locations.forEach((location) => {
+            const option = document.createElement("option");
+            option.value = location.id;
+            option.textContent = location.name;
+            select.appendChild(option);
+          });
+          await load();
+        } catch (error) { setStatus(error.message); }
+      }
+
+      $("reload").addEventListener("click", () => load(false));
+      $("refresh").addEventListener("click", () => load(true));
+      $("location").addEventListener("change", () => load(false));
+      $("verify").addEventListener("click", async () => {
+        try {
+          setStatus("Asking Azure AI Foundry…");
+          const result = await api(`/api/verify/${$("location").value}`, { method: "POST" });
+          setStatus(result.summary);
+        } catch (error) { setStatus(error.message); }
+      });
+
+      init();
+    </script>
+  </body>
+</html>

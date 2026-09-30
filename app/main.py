@@ -4,20 +4,26 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .auth import require_api_key
+from .clock import now_utc
 from .config import Location, Settings, get_settings
 from .models import (
+    FailureEvent,
+    LiveCheckResult,
     LocationForecast,
     ProviderOverride,
     ProviderRanking,
+    SatelliteReading,
+    SensorReading,
     SeasonInfo,
     VerificationResult,
 )
@@ -42,6 +48,42 @@ class ProviderInfo(BaseModel):
     description: str
     requires_api_key: bool
     available: bool
+
+
+class SensorReadingIn(BaseModel):
+    observed_at: Optional[datetime] = None
+    temperature: Optional[float] = None
+    #: rain since the previous reading (not the daily total)
+    precipitation_mm: Optional[float] = Field(default=None, ge=0)
+
+
+class SatelliteReadingIn(BaseModel):
+    observed_at: Optional[datetime] = None
+    cloud_cover: Optional[float] = Field(default=None, ge=0, le=100)
+    convective: Optional[bool] = None
+    cloud_top_temperature: Optional[float] = None
+    channel: str = "unknown"
+    source: str = "push"
+
+
+class ReadingsPush(BaseModel):
+    """Readings pushed by Home Assistant (a single reading or a batch)."""
+
+    observed_at: Optional[datetime] = None
+    temperature: Optional[float] = None
+    precipitation_mm: Optional[float] = Field(default=None, ge=0)
+    readings: List[SensorReadingIn] = Field(default_factory=list)
+    satellite: List[SatelliteReadingIn] = Field(default_factory=list)
+    #: adjustment Home Assistant applied per consumer, 0 = none, 1 = fully reduced
+    adjustments: Dict[str, float] = Field(default_factory=dict)
+
+
+def _utc(moment: Optional[datetime]) -> datetime:
+    if moment is None:
+        return now_utc()
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
 
 
 def get_service(request: Request) -> WeatherService:
@@ -213,6 +255,75 @@ def create_app(
         location_id: str, service: WeatherService = Depends(get_service)
     ) -> dict:
         return await _guard(service.home_assistant_state(location_id))
+
+    @app.post("/api/readings/{location_id}", dependencies=protected)
+    async def push_readings(
+        location_id: str,
+        body: ReadingsPush,
+        service: WeatherService = Depends(get_service),
+    ) -> dict:
+        items = list(body.readings)
+        if body.temperature is not None or body.precipitation_mm is not None:
+            items.append(
+                SensorReadingIn(
+                    observed_at=body.observed_at,
+                    temperature=body.temperature,
+                    precipitation_mm=body.precipitation_mm,
+                )
+            )
+        sensors = [
+            SensorReading(
+                location_id=location_id,
+                observed_at=_utc(item.observed_at),
+                temperature=item.temperature,
+                precipitation_mm=item.precipitation_mm,
+            )
+            for item in items
+            if item.temperature is not None or item.precipitation_mm is not None
+        ]
+        satellite = [
+            SatelliteReading(
+                location_id=location_id,
+                observed_at=_utc(item.observed_at),
+                cloud_cover=item.cloud_cover,
+                convective=item.convective,
+                cloud_top_temperature=item.cloud_top_temperature,
+                channel=item.channel,
+                source=item.source,
+            )
+            for item in body.satellite
+        ]
+        try:
+            return service.push_readings(
+                location_id, sensors, satellite, body.adjustments
+            )
+        except UnknownLocationError as exc:
+            raise _unknown_location(exc) from exc
+
+    @app.get(
+        "/api/live-check/{location_id}",
+        response_model=LiveCheckResult,
+        dependencies=protected,
+    )
+    async def live_check(
+        location_id: str, service: WeatherService = Depends(get_service)
+    ) -> LiveCheckResult:
+        return await _guard(service.live_check(location_id))
+
+    @app.get(
+        "/api/failures/{location_id}",
+        response_model=List[FailureEvent],
+        dependencies=protected,
+    )
+    async def failures(
+        location_id: str,
+        limit: int = Query(default=50, ge=1, le=500),
+        service: WeatherService = Depends(get_service),
+    ) -> List[FailureEvent]:
+        try:
+            return service.failures(location_id, limit=limit)
+        except UnknownLocationError as exc:
+            raise _unknown_location(exc) from exc
 
     return app
 

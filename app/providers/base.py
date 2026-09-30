@@ -10,7 +10,7 @@ import httpx
 
 from ..clock import now_utc
 from ..config import Location, Settings
-from ..models import DailyForecast, ProviderForecast
+from ..models import DailyForecast, HourlyForecast, ProviderForecast
 
 LOGGER = logging.getLogger(__name__)
 
@@ -38,6 +38,12 @@ class WeatherProvider(abc.ABC):
     ) -> List[DailyForecast]:
         """Return the daily forecast for ``location``."""
 
+    async def _fetch_hourly(
+        self, client: httpx.AsyncClient, location: Location
+    ) -> List[HourlyForecast]:
+        """Optional hour by hour forecast used by the live verification."""
+        return []
+
     async def fetch(
         self, client: httpx.AsyncClient, location: Location
     ) -> ProviderForecast:
@@ -54,6 +60,13 @@ class WeatherProvider(abc.ABC):
                 days=[],
                 error=f"{type(exc).__name__}: {exc}",
             )
+        try:
+            hourly = await self._fetch_hourly(client, location)
+        except Exception as exc:  # noqa: BLE001 - daily data stays usable
+            LOGGER.warning(
+                "hourly forecast of %s failed for %s: %s", self.name, location.id, exc
+            )
+            hourly = []
         return ProviderForecast(
             provider=self.name,
             location_id=location.id,
@@ -61,6 +74,7 @@ class WeatherProvider(abc.ABC):
             days=sorted(days, key=lambda day: day.target_date)[
                 : self.settings.forecast_days
             ],
+            hourly=sorted(hourly, key=lambda hour: hour.time),
         )
 
 

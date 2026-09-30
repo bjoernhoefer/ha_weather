@@ -23,6 +23,12 @@ verifies how accurate every source actually was and exposes a
   | `gem` – Environment Canada GEM via Open-Meteo | public, no registration |
   | `openweathermap` – OpenWeatherMap 5 day | free registration (`HAW_OPENWEATHERMAP_API_KEY`) |
   | `weatherapi` – WeatherAPI.com | free registration (`HAW_WEATHERAPI_API_KEY`) |
+  | `geosphere` – GeoSphere Austria C-LAEF AlpeAdria 1 km (60 h) – **Vienna** | public, no registration |
+  | `aemet` – AEMET OpenData municipality forecast – **Porto Cristo** | free registration (`HAW_AEMET_API_KEY`) |
+
+  Regional sources only run for the locations they cover: `geosphere` for
+  locations inside its Alpine model domain, `aemet` for locations with an
+  `aemet_municipality` code. Other locations don't list them in the ranking.
 
 * **Source control** – every source can be switched on/off globally in the web
   UI, and additional keyless sources (any Open-Meteo weather model) can be
@@ -69,12 +75,13 @@ All settings are environment variables prefixed with `HAW_`
 | --- | --- | --- |
 | `HAW_DEPLOYMENT_MODE` | `local` | `local` = anonymous (private subnet), `public` = API key required for **every** request |
 | `HAW_API_KEYS` | – | comma separated keys, mandatory in `public` mode |
-| `HAW_LOCATIONS` | Vienna + Porto Cristo | JSON list of `{id,name,latitude,longitude,timezone}` |
+| `HAW_LOCATIONS` | Vienna + Porto Cristo | JSON list of `{id,name,latitude,longitude,timezone,aemet_municipality}` (`aemet_municipality` = 5 digit INE code, optional, Spain only) |
 | `HAW_FORECAST_DAYS` | `7` | forecast horizon |
 | `HAW_CACHE_TTL_SECONDS` | `1800` | age at which a cached forecast is refetched |
 | `HAW_DATABASE_PATH` | `data/ha_weather.sqlite3` | forecast/observation archive |
 | `HAW_OPENWEATHERMAP_API_KEY` | – | enables the OpenWeatherMap provider |
 | `HAW_WEATHERAPI_API_KEY` | – | enables the WeatherAPI.com provider |
+| `HAW_AEMET_API_KEY` | – | enables the AEMET provider (<https://opendata.aemet.es/centrodedescargas/altaUsuario>) |
 | `HAW_AZURE_FOUNDRY_*` | – | Azure AI Foundry verification, see the docs |
 
 Providers whose (free) API key is missing are simply skipped.
@@ -124,14 +131,69 @@ go to `api.open-meteo.com`, arbitrary URLs cannot be configured.
 | --- | --- | --- |
 | ECMWF IFS, Météo-France, UK Met Office, Environment Canada GEM (Open-Meteo) | no | **added** as built-in providers |
 | Further Open-Meteo models (ICON-D2/EU, AROME HD, KNMI, DMI, JMA, MET Nordic, ItaliaMeteo ICON-2I, MeteoSwiss ICON-CH2, CMA, BoM, ECMWF AIFS, …) | no | available as **custom sources** via the source control |
-| GeoSphere Austria (dataset.api.hub.geosphere.at) | no | candidate – very good for Vienna, needs an own parser (hourly NWP time series) |
-| Bright Sky (DWD MOSMIX/observations) | no | candidate – Germany centric, little value for Vienna/Porto Cristo |
+| GeoSphere Austria (dataset.api.hub.geosphere.at) | no | **added** as `geosphere` (Vienna) |
+| Bright Sky (DWD MOSMIX/observations) | no | candidate – Germany centric, see *German sources* below |
 | wttr.in | no | not added – only 3 days, rate limited, no stable SLA |
 | 7Timer! | no | not added – coarse resolution, no daily precipitation totals |
 | US National Weather Service (api.weather.gov) | no | not applicable – US locations only |
-| AEMET OpenData (Spain) | free key | candidate for Porto Cristo, requires registration |
+| AEMET OpenData (Spain) | free key | **added** as `aemet` (Porto Cristo) |
+| Meteo de les Illes (meteodelesilles.com, Instagram) | – | not usable automatically, see below |
 | Tomorrow.io, Visual Crossing, Pirate Weather, Meteoblue, AccuWeather | free key | possible future providers, require registration |
 | `openweathermap`, `weatherapi` | free key | already supported |
+
+### AEMET (Porto Cristo)
+
+* Set `HAW_AEMET_API_KEY`. The key is sent as `api_key` header, never in the URL.
+* Porto Cristo belongs to the municipality of **Manacor**, INE code `07033`
+  (preconfigured). Other Spanish locations need their own
+  `aemet_municipality` in `HAW_LOCATIONS`.
+* Temperatures, wind and sky state come from the daily forecast (7 days).
+  AEMET publishes daily precipitation only as a *probability*, so the amount
+  in mm is summed from the hourly forecast and is only reported for fully
+  covered days (usually the next 1–2 days).
+
+### GeoSphere Austria (Vienna)
+
+* Uses the `nwp-v2-1h-1km` dataset (C-LAEF AlpeAdria, 1 km, hourly, runs every
+  3 h). The older `nwp-v1-1h-2500m` dataset is shut down by GeoSphere on
+  4 Nov 2026 and therefore not used.
+* The model runs only 60 h ahead, so GeoSphere contributes to the next ~2
+  complete local days. Incomplete days are left out so that min/max values
+  are not skewed.
+* Data source: GeoSphere Austria – <https://data.hub.geosphere.at> (CC BY 4.0).
+  The API allows about 240 requests per hour, far more than one refresh per
+  `HAW_CACHE_TTL_SECONDS` needs.
+
+### Meteo de les Illes
+
+[meteodelesilles.com](https://www.meteodelesilles.com/) publishes very good
+hand-written forecasts for the Balearic Islands, mainly as text and images on
+Instagram. It can't be added as a source:
+
+* There is no public API or machine-readable feed. Scraping the website or
+  Instagram would be fragile and breaks Instagram's terms of use, and the
+  forecasts are their copyrighted work.
+* The forecasts are text for the whole island, so there are no numbers per
+  location to score against observations.
+
+If you'd like to use it anyway, ask Meteo de les Illes for permission and
+for a feed (e.g. JSON/RSS). A small provider could then be written. Until
+then, it works best as a manual cross-check: when they predict something
+different, use the manual rank/enable switches in the web UI.
+
+### German sources
+
+| Source | API key | Usefulness for Vienna / Porto Cristo |
+| --- | --- | --- |
+| DWD ICON, ICON-EU, ICON-D2 (Open-Meteo) | no | already there: `dwd_icon` built-in; `icon_eu`/`icon_d2` as custom sources (ICON-D2 covers Vienna, not Mallorca) |
+| DWD ICON-EPS ensemble (Open-Meteo ensemble API) | no | promising – spread of ensemble members = forecast uncertainty; would need a new "uncertainty" field |
+| DWD MOSMIX (opendata.dwd.de) | no | **most promising** – statistically corrected point forecasts for ~5,400 stations worldwide, up to 10 days, including Wien Hohe Warte (`11035`) and Palma de Mallorca (`08306`). Needs a KMZ/XML parser and a station id per location |
+| Bright Sky (api.brightsky.dev) | no | JSON wrapper around DWD MOSMIX/observations; mainly aimed at Germany, check station coverage before using it |
+| DWD warnings (CAP) | no | Germany only – not relevant |
+| Kachelmannwetter, wetter.com, Meteomatics | commercial / trial key | good quality, but paid for regular use |
+
+Recommendation: DWD MOSMIX would be the next step. It adds a
+station-based, statistically corrected forecast for both locations.
 
 ## Home Assistant
 

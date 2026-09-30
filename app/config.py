@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     request_timeout_seconds: float = 15.0
     forecast_days: int = 7
     #: how long a forecast is served from memory before it is refetched
-    cache_ttl_seconds: int = 1800
+    cache_ttl_seconds: int = 3600
     #: ``watering_recommended`` turns on when rain minus evapotranspiration of
     #: today and the next two days is below ``-watering_deficit_mm``
     watering_deficit_mm: float = Field(default=5.0, ge=0)

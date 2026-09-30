@@ -9,7 +9,7 @@ from app.config import Settings
 from app.providers import build_providers, registered_providers
 from app.providers.conditions import condition_from_wmo, normalize_condition
 from app.providers.met_no import parse_met_no
-from app.providers.open_meteo import parse_open_meteo_daily
+from app.providers.open_meteo import parse_open_meteo_daily, parse_open_meteo_hourly
 from app.providers.openweathermap import parse_openweathermap
 from app.providers.weatherapi import parse_weatherapi
 
@@ -39,6 +39,22 @@ def test_open_meteo_parsing_handles_missing_columns():
     assert len(days) == 1
     assert days[0].temperature_min is None
     assert days[0].condition is None
+
+
+def test_open_meteo_hourly_parsing(today):
+    payload = {
+        "hourly": {
+            "time": [f"{today.isoformat()}T00:00", f"{today.isoformat()}T01:00"],
+            "temperature_2m": [10.0, 11.0],
+            "precipitation": [0.2, 0.0],
+            "wind_speed_10m": [5.0, 6.0],
+            "weather_code": [3, 0],
+        }
+    }
+    hours = parse_open_meteo_hourly(payload, "Europe/Vienna")
+    assert len(hours) == 2
+    assert hours[0].temperature == 10.0
+    assert hours[0].target_time.tzinfo is not None
 
 
 def test_met_no_parsing_aggregates_days(today):

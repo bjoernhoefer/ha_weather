@@ -37,7 +37,9 @@ verifies how accurate every source actually was and exposes a
   a `watering_recommended` hint, sunshine hours, solar radiation and soil
   moisture per day (Open-Meteo, no key), see
   [docs/home-assistant.md](docs/home-assistant.md#garden-and-energy-sensors).
-* **Weighted consensus forecast** – accurate providers count more.
+* **Weighted consensus forecast** – accurate providers count more; the next 24
+  hours are available hourly, the following 48 hours in 4-hour intervals, and
+  days 3–7 as daily values. The forecast cache refreshes hourly by default.
 * **Accuracy verification** – every forecast is archived in SQLite and compared
   with the measured values of the following days (mean absolute error for
   temperature and precipitation) which produces the **Top/Low list**.
@@ -99,7 +101,7 @@ All settings are environment variables prefixed with `HAW_`
 | `HAW_API_KEYS` | – | comma separated keys, mandatory in `public` mode |
 | `HAW_LOCATIONS` | Vienna + Porto Cristo | JSON list of `{id,name,latitude,longitude,timezone,aemet_municipality}` (`aemet_municipality` = 5 digit INE code, optional, Spain only) |
 | `HAW_FORECAST_DAYS` | `7` | forecast horizon |
-| `HAW_CACHE_TTL_SECONDS` | `1800` | age at which a cached forecast is refetched |
+| `HAW_CACHE_TTL_SECONDS` | `3600` | age at which a cached forecast is refetched |
 | `HAW_WATERING_DEFICIT_MM` | `5` | `watering_recommended` turns on when rain − ET0 over 3 days is below −this value |
 | `HAW_DATABASE_PATH` | `data/ha_weather.sqlite3` | forecast/observation archive |
 | `HAW_OPENWEATHERMAP_API_KEY` | – | enables the OpenWeatherMap provider |
@@ -123,7 +125,7 @@ Providers whose (free) API key is missing are simply skipped.
 | `DELETE /api/sources/{name}` | remove a custom source (built-in sources can only be disabled) |
 | `PUT /api/sources/{name}/api-key` | set/replace the API key of a source `{"api_key": "..."}` – the key is never returned |
 | `DELETE /api/sources/{name}/api-key` | remove the key set in the UI (the environment key applies again) |
-| `GET /api/forecast/{location}` | consensus + per provider forecast, ranking and season |
+| `GET /api/forecast/{location}` | consensus (`hourly`, `four_hourly`, `days`) + per provider forecast, ranking and season |
 | `POST /api/forecast/{location}/refresh` | force a new query of all providers |
 | `GET /api/ranking/{location}` | Top/Low provider list |
 | `PUT /api/ranking/{location}/{provider}` | manual override `{"manual_rank": 1, "enabled": true}` |

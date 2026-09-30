@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import abc
+import asyncio
 import logging
 from typing import Dict, List, Optional, Type
 
@@ -10,7 +11,7 @@ import httpx
 
 from ..clock import now_utc
 from ..config import Location, Settings
-from ..models import DailyForecast, ProviderForecast
+from ..models import DailyForecast, HourlyForecast, ProviderForecast
 
 LOGGER = logging.getLogger(__name__)
 
@@ -44,13 +45,22 @@ class WeatherProvider(abc.ABC):
     ) -> List[DailyForecast]:
         """Return the daily forecast for ``location``."""
 
+    async def _fetch_hourly(
+        self, client: httpx.AsyncClient, location: Location
+    ) -> List[HourlyForecast]:
+        """Return optional hourly values for the short-range consensus."""
+        return []
+
     async def fetch(
         self, client: httpx.AsyncClient, location: Location
     ) -> ProviderForecast:
         """Fetch a forecast, converting failures into an error result."""
         issued_at = now_utc()
         try:
-            days = await self._fetch(client, location)
+            days, hours = await asyncio.gather(
+                self._fetch(client, location),
+                self._fetch_hourly(client, location),
+            )
         except Exception as exc:  # noqa: BLE001 - one bad source must not break all
             LOGGER.warning("provider %s failed for %s: %s", self.name, location.id, exc)
             return ProviderForecast(
@@ -67,6 +77,7 @@ class WeatherProvider(abc.ABC):
             days=sorted(days, key=lambda day: day.target_date)[
                 : self.settings.forecast_days
             ],
+            hours=sorted(hours, key=lambda hour: hour.target_time),
         )
 
 

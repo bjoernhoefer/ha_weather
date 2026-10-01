@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import List, Optional
+from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from .config import DEFAULT_ELASTICSEARCH_LOCATION_FIELD
 
 
 class DailyForecast(BaseModel):
@@ -45,13 +47,22 @@ class ProviderForecast(BaseModel):
 
 
 class Observation(BaseModel):
-    """Measured values used as ground truth when scoring providers."""
+    """Measured values used as ground truth when scoring providers.
+
+    ``scope`` separates sensors placed inside the house from the ones
+    outside: only ``outdoor`` observations are comparable with the weather
+    providers, ``indoor`` readings are kept for other features (e.g. home
+    comfort) and are never used for provider scoring.
+    """
 
     location_id: str
     target_date: date
     temperature_min: Optional[float] = None
     temperature_max: Optional[float] = None
     precipitation_mm: Optional[float] = None
+    scope: Literal["indoor", "outdoor"] = "outdoor"
+    #: name of the :class:`ObservationSource` that produced this row
+    source: Optional[str] = None
 
 
 class ProviderScore(BaseModel):
@@ -180,3 +191,108 @@ class SourceInfo(BaseModel):
     #: where the API key comes from: ``"ui"``, ``"environment"`` or ``None``.
     #: The key itself is never returned.
     api_key_origin: Optional[str] = None
+
+
+#: longest string accepted for a single URL/token/index/field-name value;
+#: longer input is truncated rather than rejected, mirroring the HTML
+#: ``maxlength`` attributes used by the web UI
+MAX_SETTING_LENGTH = 500
+#: longest accepted Home Assistant entity id / Elasticsearch field name
+MAX_ENTITY_LENGTH = 200
+#: most entity ids / field names kept per location and scope
+MAX_ENTITIES_PER_LOCATION = 20
+
+
+def _truncate(value: Optional[str], max_length: int = MAX_SETTING_LENGTH) -> Optional[str]:
+    if value is None:
+        return None
+    value = value.strip()
+    return value[:max_length] if value else None
+
+
+def _truncate_entities(values: List[str]) -> List[str]:
+    cleaned = [item.strip()[:MAX_ENTITY_LENGTH] for item in values if item.strip()]
+    return cleaned[:MAX_ENTITIES_PER_LOCATION]
+
+
+class HomeAssistantSettingsIn(BaseModel):
+    """Access details for the Home Assistant observation source.
+
+    ``token`` is optional: an empty value keeps the token already stored
+    (so the web UI never has to display a saved secret back to the user).
+    Overlong input is truncated rather than rejected, mirroring the HTML
+    ``maxlength`` attributes used by the web UI.
+    """
+
+    url: Optional[str] = None
+    token: Optional[str] = None
+    location_id: str
+    indoor_entities: List[str] = Field(default_factory=list)
+    outdoor_entities: List[str] = Field(default_factory=list)
+
+    @field_validator("url", "token", mode="after")
+    @classmethod
+    def _strip_and_truncate(cls, value: Optional[str]) -> Optional[str]:
+        return _truncate(value, MAX_SETTING_LENGTH)
+
+    @field_validator("indoor_entities", "outdoor_entities", mode="after")
+    @classmethod
+    def _clean_entities(cls, value: List[str]) -> List[str]:
+        return _truncate_entities(value)
+
+
+class HomeAssistantSettingsInfo(BaseModel):
+    """Current Home Assistant configuration, as shown in the web UI."""
+
+    configured: bool
+    available: bool
+    origin: Optional[str] = None
+    url: Optional[str] = None
+    indoor_entities: Dict[str, List[str]] = Field(default_factory=dict)
+    outdoor_entities: Dict[str, List[str]] = Field(default_factory=dict)
+
+
+class ElasticsearchSettingsIn(BaseModel):
+    """Access details for the Elasticsearch observation source.
+
+    Overlong input is truncated rather than rejected, mirroring the HTML
+    ``maxlength`` attributes used by the web UI.
+    """
+
+    url: Optional[str] = None
+    api_key: Optional[str] = None
+    index: Optional[str] = None
+    location_field: Optional[str] = None
+    location_id: str
+    indoor_field: Optional[str] = None
+    outdoor_field: Optional[str] = None
+
+    @field_validator("url", "api_key", "index", mode="after")
+    @classmethod
+    def _strip_and_truncate(cls, value: Optional[str]) -> Optional[str]:
+        return _truncate(value, MAX_SETTING_LENGTH)
+
+    @field_validator("location_field", "indoor_field", "outdoor_field", mode="after")
+    @classmethod
+    def _strip_and_truncate_entity(cls, value: Optional[str]) -> Optional[str]:
+        return _truncate(value, MAX_ENTITY_LENGTH)
+
+
+class ElasticsearchSettingsInfo(BaseModel):
+    """Current Elasticsearch configuration, as shown in the web UI."""
+
+    configured: bool
+    available: bool
+    origin: Optional[str] = None
+    url: Optional[str] = None
+    index: Optional[str] = None
+    location_field: str = DEFAULT_ELASTICSEARCH_LOCATION_FIELD
+    indoor_fields: Dict[str, str] = Field(default_factory=dict)
+    outdoor_fields: Dict[str, str] = Field(default_factory=dict)
+
+
+class ObservationSourcesInfo(BaseModel):
+    """Everything the web UI needs to show/edit the observation sources."""
+
+    home_assistant: HomeAssistantSettingsInfo
+    elasticsearch: ElasticsearchSettingsInfo

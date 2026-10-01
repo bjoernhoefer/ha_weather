@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+import sqlite3
+from datetime import date, datetime, timedelta, timezone
 
 from app.clock import today_utc
 from app.models import CustomSource, DailyForecast, Observation, ProviderForecast, ProviderOverride
@@ -41,6 +42,91 @@ def test_failed_forecasts_are_not_stored(storage):
     assert storage.save_forecast(empty) == 0
 
 
+def test_observations_merge_without_overwriting_with_null(storage):
+    """Two sources writing the same (location, date, scope) must not let one
+    source's missing field (e.g. Home Assistant has no precipitation) wipe
+    out a value already saved by another source (e.g. Open-Meteo)."""
+    yesterday = today_utc() - timedelta(days=1)
+    storage.save_observations(
+        [
+            Observation(
+                location_id="vienna",
+                target_date=yesterday,
+                temperature_min=9.0,
+                temperature_max=18.0,
+                precipitation_mm=2.5,
+                scope="outdoor",
+                source="open_meteo",
+            )
+        ]
+    )
+    storage.save_observations(
+        [
+            Observation(
+                location_id="vienna",
+                target_date=yesterday,
+                temperature_min=10.0,
+                temperature_max=19.0,
+                scope="outdoor",
+                source="home_assistant",
+            )
+        ]
+    )
+    merged = storage.observations("vienna")[yesterday]
+    assert merged.precipitation_mm == 2.5
+    assert merged.temperature_min == 10.0
+    assert merged.temperature_max == 19.0
+    assert merged.source == "home_assistant+open_meteo"
+
+    # a third refresh from the same sources must not keep growing the string
+    storage.save_observations(
+        [
+            Observation(
+                location_id="vienna",
+                target_date=yesterday,
+                temperature_min=10.5,
+                scope="outdoor",
+                source="home_assistant",
+            )
+        ]
+    )
+    assert storage.observations("vienna")[yesterday].source == "home_assistant+open_meteo"
+
+
+def test_observations_merge_within_a_single_batch(storage):
+    """Two rows for the same (location, date, scope) written in one
+    ``save_observations`` call (e.g. Open-Meteo and Home Assistant outdoor
+    observations for the same day returned together by ``fetch_observations``)
+    must merge their sources with each other, not just overwrite."""
+    yesterday = today_utc() - timedelta(days=1)
+    storage.save_observations(
+        [
+            Observation(
+                location_id="graz",
+                target_date=yesterday,
+                temperature_min=9.0,
+                temperature_max=18.0,
+                precipitation_mm=2.5,
+                scope="outdoor",
+                source="open_meteo",
+            ),
+            Observation(
+                location_id="graz",
+                target_date=yesterday,
+                temperature_min=10.0,
+                temperature_max=19.0,
+                scope="outdoor",
+                source="home_assistant",
+            ),
+        ]
+    )
+    merged = storage.observations("graz")[yesterday]
+    assert merged.precipitation_mm == 2.5
+    assert merged.temperature_min == 10.0
+    assert merged.temperature_max == 19.0
+    assert merged.source == "home_assistant+open_meteo"
+
+
 def test_observations_round_trip(storage):
     yesterday = today_utc() - timedelta(days=1)
     storage.save_observations(
@@ -52,6 +138,63 @@ def test_observations_round_trip(storage):
     )
     stored = storage.observations("vienna")
     assert stored[yesterday].temperature_max == 18.0
+
+
+def test_observations_are_filtered_by_scope(storage):
+    yesterday = today_utc() - timedelta(days=1)
+    storage.save_observations(
+        [
+            Observation(
+                location_id="vienna",
+                target_date=yesterday,
+                temperature_max=18.0,
+                scope="outdoor",
+                source="open_meteo",
+            ),
+            Observation(
+                location_id="vienna",
+                target_date=yesterday,
+                temperature_max=22.0,
+                scope="indoor",
+                source="home_assistant",
+            ),
+        ]
+    )
+    outdoor = storage.observations("vienna")
+    assert outdoor[yesterday].temperature_max == 18.0
+    indoor = storage.observations("vienna", scope="indoor")
+    assert indoor[yesterday].temperature_max == 22.0
+    assert indoor[yesterday].source == "home_assistant"
+
+
+def test_legacy_observations_table_is_migrated_to_outdoor_scope(settings):
+    connection = sqlite3.connect(settings.database_path)
+    connection.executescript(
+        """
+        CREATE TABLE observations (
+            location_id TEXT NOT NULL,
+            target_date TEXT NOT NULL,
+            temperature_min REAL,
+            temperature_max REAL,
+            precipitation_mm REAL,
+            PRIMARY KEY (location_id, target_date)
+        );
+        INSERT INTO observations VALUES ('vienna', '2024-01-01', 1.0, 2.0, 0.5);
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    storage = Storage(settings.database_path)
+    try:
+        stored = storage.observations("vienna")
+        observation = stored[date(2024, 1, 1)]
+        assert observation.temperature_min == 1.0
+        assert observation.temperature_max == 2.0
+        assert observation.scope == "outdoor"
+        assert observation.source is None
+    finally:
+        storage.close()
 
 
 def test_overrides_round_trip(storage):

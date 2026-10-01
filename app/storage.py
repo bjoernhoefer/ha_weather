@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
 from datetime import date, timedelta
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .clock import today_utc
 from .models import CustomSource, Observation, ProviderForecast, ProviderOverride
@@ -29,10 +30,12 @@ CREATE TABLE IF NOT EXISTS forecasts (
 CREATE TABLE IF NOT EXISTS observations (
     location_id TEXT NOT NULL,
     target_date TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'outdoor',
     temperature_min REAL,
     temperature_max REAL,
     precipitation_mm REAL,
-    PRIMARY KEY (location_id, target_date)
+    source TEXT,
+    PRIMARY KEY (location_id, target_date, scope)
 );
 CREATE TABLE IF NOT EXISTS overrides (
     provider TEXT NOT NULL,
@@ -55,6 +58,10 @@ CREATE TABLE IF NOT EXISTS custom_sources (
     model TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS observation_source_settings (
+    source TEXT PRIMARY KEY,
+    config TEXT NOT NULL
+);
 """
 
 
@@ -71,7 +78,49 @@ class Storage:
         self._connection.row_factory = sqlite3.Row
         with self._lock:
             self._connection.executescript(SCHEMA)
+            self._migrate_observations_scope()
             self._connection.commit()
+
+    def _migrate_observations_scope(self) -> None:
+        """Rebuild ``observations`` with the ``scope``/``source`` columns.
+
+        Databases created before indoor/outdoor tracking was added only have
+        a ``(location_id, target_date)`` primary key and no ``scope``/
+        ``source`` columns; existing rows are migrated as ``outdoor``.
+        """
+        columns = {
+            row["name"]
+            for row in self._connection.execute("PRAGMA table_info(observations)")
+        }
+        if "scope" in columns:
+            return
+        try:
+            self._connection.executescript(
+                """
+                BEGIN;
+                ALTER TABLE observations RENAME TO observations_legacy;
+                CREATE TABLE observations (
+                    location_id TEXT NOT NULL,
+                    target_date TEXT NOT NULL,
+                    scope TEXT NOT NULL DEFAULT 'outdoor',
+                    temperature_min REAL,
+                    temperature_max REAL,
+                    precipitation_mm REAL,
+                    source TEXT,
+                    PRIMARY KEY (location_id, target_date, scope)
+                );
+                INSERT INTO observations (location_id, target_date, scope,
+                    temperature_min, temperature_max, precipitation_mm, source)
+                SELECT location_id, target_date, 'outdoor',
+                    temperature_min, temperature_max, precipitation_mm, NULL
+                FROM observations_legacy;
+                DROP TABLE observations_legacy;
+                COMMIT;
+                """
+            )
+        except Exception:
+            self._connection.rollback()
+            raise
 
     def close(self) -> None:
         with self._lock:
@@ -141,39 +190,93 @@ class Storage:
     # observations
     # ------------------------------------------------------------------
     def save_observations(self, observations: List[Observation]) -> int:
-        rows = [
-            (
-                observation.location_id,
-                observation.target_date.isoformat(),
-                observation.temperature_min,
-                observation.temperature_max,
-                observation.precipitation_mm,
-            )
-            for observation in observations
-        ]
-        if not rows:
+        """Upsert observations, merging per-field so one source filling in a
+        value (e.g. Open-Meteo's precipitation) is not wiped out by another
+        source writing the same ``(location_id, target_date, scope)`` row
+        without that field (e.g. Home Assistant/Elasticsearch temperatures).
+        When two sources both provide a non-null value for the same field,
+        the last one written wins - ``observations`` is expected in
+        ``Settings.observation_sources`` order (see ``fetch_observations``),
+        so later sources take precedence over earlier ones for conflicting
+        fields. ``source`` is combined (e.g. ``"home_assistant+open_meteo"``)
+        so it keeps reflecting every source that actually contributed a
+        field, instead of only the last writer.
+        """
+        if not observations:
             return 0
         with self._lock:
+            existing_sources: Dict[Tuple[str, str, str], Optional[str]] = {}
+            dates_by_location: Dict[str, List[date]] = {}
+            for observation in observations:
+                dates_by_location.setdefault(observation.location_id, []).append(
+                    observation.target_date
+                )
+            # Existing `source` values are looked up per location with a
+            # bounded `target_date` range (rather than binding one parameter
+            # set per row) to avoid hitting SQLite's bound-parameter limit on
+            # large batches.
+            for location_id, dates in dates_by_location.items():
+                rows = self._connection.execute(
+                    """
+                    SELECT target_date, scope, source FROM observations
+                    WHERE location_id = ? AND target_date BETWEEN ? AND ?
+                    """,
+                    (location_id, min(dates).isoformat(), max(dates).isoformat()),
+                )
+                for row in rows:
+                    existing_sources[(location_id, row["target_date"], row["scope"])] = row["source"]
+
+            upsert_rows = []
+            for observation in observations:
+                key = (
+                    observation.location_id,
+                    observation.target_date.isoformat(),
+                    observation.scope,
+                )
+                merged_source = _merge_sources(existing_sources.get(key), observation.source)
+                # Update the in-memory map as each row is merged so multiple
+                # rows for the same key within one batch (e.g. Open-Meteo and
+                # Home Assistant outdoor rows for the same day) are merged
+                # with each other too, not just with what was already stored.
+                existing_sources[key] = merged_source
+                upsert_rows.append(
+                    (
+                        observation.location_id,
+                        observation.target_date.isoformat(),
+                        observation.scope,
+                        observation.temperature_min,
+                        observation.temperature_max,
+                        observation.precipitation_mm,
+                        merged_source,
+                    )
+                )
             self._connection.executemany(
                 """
-                INSERT INTO observations (location_id, target_date, temperature_min,
-                    temperature_max, precipitation_mm)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT (location_id, target_date)
-                DO UPDATE SET temperature_min=excluded.temperature_min,
-                    temperature_max=excluded.temperature_max,
-                    precipitation_mm=excluded.precipitation_mm
+                INSERT INTO observations (location_id, target_date, scope,
+                    temperature_min, temperature_max, precipitation_mm, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (location_id, target_date, scope)
+                DO UPDATE SET
+                    temperature_min=COALESCE(excluded.temperature_min, observations.temperature_min),
+                    temperature_max=COALESCE(excluded.temperature_max, observations.temperature_max),
+                    precipitation_mm=COALESCE(excluded.precipitation_mm, observations.precipitation_mm),
+                    source=excluded.source
                 """,
-                rows,
+                upsert_rows,
             )
             self._connection.commit()
-        return len(rows)
+        return len(observations)
 
     def observations(
-        self, location_id: str, since: Optional[date] = None
+        self, location_id: str, since: Optional[date] = None, scope: str = "outdoor"
     ) -> Dict[date, Observation]:
-        query = "SELECT * FROM observations WHERE location_id = ?"
-        params: List[object] = [location_id]
+        """Observations of one ``scope`` (``outdoor`` by default).
+
+        Provider accuracy scoring only ever uses outdoor readings - indoor
+        sensors are not comparable with weather provider forecasts.
+        """
+        query = "SELECT * FROM observations WHERE location_id = ? AND scope = ?"
+        params: List[object] = [location_id, scope]
         if since is not None:
             query += " AND target_date >= ?"
             params.append(since.isoformat())
@@ -188,6 +291,8 @@ class Storage:
                 temperature_min=row["temperature_min"],
                 temperature_max=row["temperature_max"],
                 precipitation_mm=row["precipitation_mm"],
+                scope=row["scope"],
+                source=row["source"],
             )
         return result
 
@@ -327,6 +432,43 @@ class Storage:
         ]
 
     # ------------------------------------------------------------------
+    # observation source settings (Home Assistant / Elasticsearch access
+    # details entered in the web UI)
+    # ------------------------------------------------------------------
+    def set_observation_source_settings(self, source: str, config: Dict[str, Any]) -> None:
+        """Persist the access details for an :class:`ObservationSource`.
+
+        ``config`` is stored as JSON so it can hold arbitrary nested data
+        (e.g. the per-location entity/field mappings) without a schema
+        migration for every new setting.
+        """
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO observation_source_settings (source, config) VALUES (?, ?)
+                ON CONFLICT (source) DO UPDATE SET config=excluded.config
+                """,
+                (source, json.dumps(config)),
+            )
+            self._connection.commit()
+
+    def delete_observation_source_settings(self, source: str) -> bool:
+        with self._lock:
+            cursor = self._connection.execute(
+                "DELETE FROM observation_source_settings WHERE source = ?", (source,)
+            )
+            self._connection.commit()
+        return cursor.rowcount > 0
+
+    def observation_source_settings(self, source: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT config FROM observation_source_settings WHERE source = ?",
+                (source,),
+            ).fetchone()
+        return json.loads(row["config"]) if row else None
+
+    # ------------------------------------------------------------------
     def purge_older_than(self, days: int) -> int:
         """Housekeeping: drop forecasts/observations older than ``days``."""
         cutoff = (today_utc() - timedelta(days=days)).isoformat()
@@ -351,3 +493,17 @@ def forecast_rows_by_provider(
             (date.fromisoformat(row["target_date"]), row)
         )
     return grouped
+
+
+def _merge_sources(existing: Optional[str], new: Optional[str]) -> Optional[str]:
+    """Combine the ``source`` of two merged observation rows.
+
+    Deduplicated and sorted so repeated refreshes from the same sources
+    don't keep growing the string (e.g. ``"home_assistant+open_meteo"``).
+    """
+    if not existing:
+        return new
+    if not new:
+        return existing
+    parts = set(existing.split("+")) | set(new.split("+"))
+    return "+".join(sorted(parts))

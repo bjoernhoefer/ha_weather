@@ -121,8 +121,58 @@ All settings are environment variables prefixed with `HAW_`
 | `HAW_WEATHERAPI_API_KEY` | – | enables the WeatherAPI.com provider |
 | `HAW_AEMET_API_KEY` | – | enables the AEMET provider (<https://opendata.aemet.es/centrodedescargas/altaUsuario>) |
 | `HAW_AZURE_FOUNDRY_*` | – | Azure AI Foundry verification, see the docs |
+| `HAW_OBSERVATION_SOURCES` | `open_meteo` | comma separated list of enabled ground-truth observation sources, see [Ground truth observations](#ground-truth-observations) |
+| `HAW_HOME_ASSISTANT_URL` / `HAW_HOME_ASSISTANT_TOKEN` | – | Home Assistant observation source |
+| `HAW_HOME_ASSISTANT_INDOOR_ENTITIES` / `HAW_HOME_ASSISTANT_OUTDOOR_ENTITIES` | `{}` | JSON object: `location_id` → list of Home Assistant entity ids |
+| `HAW_ELASTICSEARCH_URL` / `HAW_ELASTICSEARCH_API_KEY` / `HAW_ELASTICSEARCH_INDEX` | – | Elasticsearch observation source |
+| `HAW_ELASTICSEARCH_LOCATION_FIELD` | `location_id` | term field used to select a location's documents |
+| `HAW_ELASTICSEARCH_INDOOR_FIELDS` / `HAW_ELASTICSEARCH_OUTDOOR_FIELDS` | `{}` | JSON object: `location_id` → name of the temperature field |
 
 Providers whose (free) API key is missing are simply skipped.
+
+### Ground truth observations
+
+Archived forecasts are compared against measured values to compute the
+Top/Low list and the consensus weights (see
+[Features](#features)). By default this ground truth comes from
+Open-Meteo's `past_days` endpoint (`open_meteo`, public, no registration).
+Two additional, pluggable sources can be enabled through
+`HAW_OBSERVATION_SOURCES` (comma separated, e.g.
+`open_meteo,home_assistant,elasticsearch`) and merged with Open-Meteo:
+
+* **`home_assistant`** – reads sensor history through Home Assistant's REST
+  `history/period` API using a
+  [long-lived access token](https://www.home-assistant.io/docs/authentication/#your-account-profile)
+  (`HAW_HOME_ASSISTANT_URL`, `HAW_HOME_ASSISTANT_TOKEN`). Map any number of
+  numeric temperature sensors per location to `HAW_HOME_ASSISTANT_INDOOR_ENTITIES`
+  and `HAW_HOME_ASSISTANT_OUTDOOR_ENTITIES` (JSON object of
+  `location_id -> [entity_id, ...]`); each day's minimum/maximum sensor state
+  becomes one observation.
+* **`elasticsearch`** – aggregates a numeric temperature field per day (daily
+  `date_histogram` with `min`/`max` sub-aggregations) from any Elasticsearch
+  index, including the free Elastic Cloud tier. Configure `HAW_ELASTICSEARCH_URL`,
+  `HAW_ELASTICSEARCH_API_KEY` (sent as `ApiKey <key>`) and
+  `HAW_ELASTICSEARCH_INDEX`, then map the indoor/outdoor temperature field name
+  per location in `HAW_ELASTICSEARCH_INDOOR_FIELDS`/`HAW_ELASTICSEARCH_OUTDOOR_FIELDS`
+  (JSON object of `location_id -> field_name`). Documents are matched to a
+  location through `HAW_ELASTICSEARCH_LOCATION_FIELD` (a term filter, default
+  `location_id`) and must have a `@timestamp` field.
+
+When more than one source reports the same day/scope, temperature and
+precipitation fields are merged (a source's `None`/missing value never
+overwrites a value already saved by another source), but when two sources
+both report a value for the same field, the **last** source fetched wins –
+sources are queried in the order listed in `HAW_OBSERVATION_SOURCES`, so
+later entries take precedence over earlier ones for conflicting fields.
+`source` itself always reflects every contributing source (e.g.
+`home_assistant+open_meteo`).
+
+Indoor and outdoor readings are tracked separately (`Observation.scope`):
+only **outdoor** observations are used to score the weather providers, since
+indoor sensors are not comparable with an outdoor weather forecast. Indoor
+observations are archived alongside them for future home-comfort features. A
+failing observation source is logged and skipped - it never blocks the
+others or the forecast refresh.
 
 ## API
 

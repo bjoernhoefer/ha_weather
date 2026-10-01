@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.models import MAX_ENTITIES_PER_LOCATION, MAX_ENTITY_LENGTH, MAX_SETTING_LENGTH
 from app.service import WeatherService
 from app.storage import Storage
 
@@ -366,3 +367,258 @@ def test_api_key_requires_authentication_in_public_mode(tmp_path, client_factory
             == 200
         )
     storage.close()
+
+
+def test_observation_sources_are_initially_unconfigured(api):
+    payload = api.get("/api/observation-sources").json()
+    assert payload["home_assistant"] == {
+        "configured": False,
+        "available": False,
+        "origin": None,
+        "url": None,
+        "indoor_entities": {},
+        "outdoor_entities": {},
+    }
+    assert payload["elasticsearch"] == {
+        "configured": False,
+        "available": False,
+        "origin": None,
+        "url": None,
+        "index": None,
+        "location_field": "location_id",
+        "indoor_fields": {},
+        "outdoor_fields": {},
+    }
+
+
+def test_home_assistant_settings_are_accepted_and_stored(api):
+    response = api.put(
+        "/api/observation-sources/home-assistant",
+        json={
+            "url": "http://homeassistant.local:8123",
+            "token": "secret-token",
+            "location_id": "vienna",
+            "indoor_entities": ["sensor.living_room_temperature"],
+            "outdoor_entities": ["sensor.garden_temperature"],
+        },
+    )
+    assert response.status_code == 200
+    assert "secret-token" not in response.text  # the token is never returned
+    home_assistant = response.json()["home_assistant"]
+    assert home_assistant["configured"] is True
+    assert home_assistant["available"] is True
+    assert home_assistant["origin"] == "ui"
+    assert home_assistant["url"] == "http://homeassistant.local:8123"
+    assert home_assistant["indoor_entities"] == {
+        "vienna": ["sensor.living_room_temperature"]
+    }
+    assert home_assistant["outdoor_entities"] == {
+        "vienna": ["sensor.garden_temperature"]
+    }
+
+    # stored values survive a fresh read, and the token is still never shown
+    reloaded = api.get("/api/observation-sources").json()["home_assistant"]
+    assert reloaded == home_assistant
+    assert "secret-token" not in api.get("/api/observation-sources").text
+
+
+def test_home_assistant_overlong_values_are_truncated_not_rejected(api):
+    overlong_url = "http://homeassistant.local:8123/" + "a" * (MAX_SETTING_LENGTH + 50)
+    overlong_token = "t" * (MAX_SETTING_LENGTH + 50)
+    many_entities = [f"sensor.outdoor_{i}" for i in range(MAX_ENTITIES_PER_LOCATION + 10)]
+    overlong_entity = "sensor." + "x" * (MAX_ENTITY_LENGTH + 20)
+
+    response = api.put(
+        "/api/observation-sources/home-assistant",
+        json={
+            "url": overlong_url,
+            "token": overlong_token,
+            "location_id": "vienna",
+            "indoor_entities": [overlong_entity],
+            "outdoor_entities": many_entities,
+        },
+    )
+    assert response.status_code == 200
+    home_assistant = response.json()["home_assistant"]
+    assert len(home_assistant["url"]) == MAX_SETTING_LENGTH
+    assert home_assistant["url"] == overlong_url[:MAX_SETTING_LENGTH]
+    assert len(home_assistant["indoor_entities"]["vienna"][0]) == MAX_ENTITY_LENGTH
+    assert len(home_assistant["outdoor_entities"]["vienna"]) == MAX_ENTITIES_PER_LOCATION
+    assert home_assistant["outdoor_entities"]["vienna"] == many_entities[:MAX_ENTITIES_PER_LOCATION]
+
+
+def test_home_assistant_settings_can_be_removed(api):
+    api.put(
+        "/api/observation-sources/home-assistant",
+        json={
+            "url": "http://homeassistant.local:8123",
+            "token": "secret-token",
+            "location_id": "vienna",
+            "indoor_entities": ["sensor.living_room_temperature"],
+            "outdoor_entities": [],
+        },
+    )
+    removed = api.delete("/api/observation-sources/home-assistant").json()["home_assistant"]
+    assert removed == {
+        "configured": False,
+        "available": False,
+        "origin": None,
+        "url": None,
+        "indoor_entities": {},
+        "outdoor_entities": {},
+    }
+
+
+def test_home_assistant_settings_reject_unknown_location(api):
+    response = api.put(
+        "/api/observation-sources/home-assistant",
+        json={"location_id": "mars", "indoor_entities": ["sensor.x"]},
+    )
+    assert response.status_code == 404
+
+
+def test_home_assistant_token_is_kept_when_not_resubmitted(api):
+    api.put(
+        "/api/observation-sources/home-assistant",
+        json={
+            "url": "http://homeassistant.local:8123",
+            "token": "secret-token",
+            "location_id": "vienna",
+            "indoor_entities": ["sensor.a"],
+            "outdoor_entities": [],
+        },
+    )
+    # resubmitting without a token (e.g. only changing entities) must not
+    # clear the previously stored token
+    response = api.put(
+        "/api/observation-sources/home-assistant",
+        json={
+            "url": "http://homeassistant.local:8123",
+            "location_id": "vienna",
+            "indoor_entities": ["sensor.a", "sensor.b"],
+            "outdoor_entities": [],
+        },
+    )
+    home_assistant = response.json()["home_assistant"]
+    assert home_assistant["origin"] == "ui"
+    assert home_assistant["available"] is True
+    assert home_assistant["indoor_entities"] == {"vienna": ["sensor.a", "sensor.b"]}
+
+
+def test_elasticsearch_settings_are_accepted_and_stored(api):
+    response = api.put(
+        "/api/observation-sources/elasticsearch",
+        json={
+            "url": "https://my-deployment.es.io",
+            "api_key": "secret-key",
+            "index": "weather",
+            "location_field": "loc",
+            "location_id": "vienna",
+            "indoor_field": "indoor_temp",
+            "outdoor_field": "outdoor_temp",
+        },
+    )
+    assert response.status_code == 200
+    assert "secret-key" not in response.text  # the key is never returned
+    elasticsearch = response.json()["elasticsearch"]
+    assert elasticsearch["configured"] is True
+    assert elasticsearch["available"] is True
+    assert elasticsearch["origin"] == "ui"
+    assert elasticsearch["url"] == "https://my-deployment.es.io"
+    assert elasticsearch["index"] == "weather"
+    assert elasticsearch["location_field"] == "loc"
+    assert elasticsearch["indoor_fields"] == {"vienna": "indoor_temp"}
+    assert elasticsearch["outdoor_fields"] == {"vienna": "outdoor_temp"}
+
+    reloaded = api.get("/api/observation-sources").json()["elasticsearch"]
+    assert reloaded == elasticsearch
+
+
+def test_elasticsearch_overlong_values_are_truncated_not_rejected(api):
+    overlong_index = "weather-" + "a" * (MAX_SETTING_LENGTH + 50)
+    overlong_field = "outdoor_" + "b" * (MAX_ENTITY_LENGTH + 50)
+
+    response = api.put(
+        "/api/observation-sources/elasticsearch",
+        json={
+            "url": "https://my-deployment.es.io",
+            "api_key": "secret-key",
+            "index": overlong_index,
+            "location_id": "vienna",
+            "outdoor_field": overlong_field,
+        },
+    )
+    assert response.status_code == 200
+    elasticsearch = response.json()["elasticsearch"]
+    assert len(elasticsearch["index"]) == MAX_SETTING_LENGTH
+    assert elasticsearch["index"] == overlong_index[:MAX_SETTING_LENGTH]
+    assert len(elasticsearch["outdoor_fields"]["vienna"]) == MAX_ENTITY_LENGTH
+    assert elasticsearch["outdoor_fields"]["vienna"] == overlong_field[:MAX_ENTITY_LENGTH]
+
+
+def test_elasticsearch_settings_can_be_removed(api):
+    api.put(
+        "/api/observation-sources/elasticsearch",
+        json={
+            "url": "https://my-deployment.es.io",
+            "api_key": "secret-key",
+            "index": "weather",
+            "location_id": "vienna",
+            "indoor_field": "indoor_temp",
+        },
+    )
+    removed = api.delete("/api/observation-sources/elasticsearch").json()["elasticsearch"]
+    assert removed == {
+        "configured": False,
+        "available": False,
+        "origin": None,
+        "url": None,
+        "index": None,
+        "location_field": "location_id",
+        "indoor_fields": {},
+        "outdoor_fields": {},
+    }
+
+
+def test_elasticsearch_settings_reject_unknown_location(api):
+    response = api.put(
+        "/api/observation-sources/elasticsearch",
+        json={"location_id": "mars", "indoor_field": "x"},
+    )
+    assert response.status_code == 404
+
+
+def test_observation_sources_ui_settings_override_the_environment(tmp_path, client_factory):
+    settings = Settings(
+        database_path=str(tmp_path / "obs-env.sqlite3"),
+        home_assistant_url="http://old-host:8123",
+        home_assistant_token="old-token",
+    )
+    storage = Storage(settings.database_path)
+    service = WeatherService(settings, storage, client_factory=client_factory)
+    with TestClient(create_app(settings, service)) as client:
+        sources = client.get("/api/observation-sources").json()
+        assert sources["home_assistant"]["origin"] == "environment"
+        assert sources["home_assistant"]["url"] == "http://old-host:8123"
+
+        client.put(
+            "/api/observation-sources/home-assistant",
+            json={
+                "url": "http://new-host:8123",
+                "token": "new-token",
+                "location_id": "vienna",
+                "indoor_entities": [],
+                "outdoor_entities": ["sensor.garden_temperature"],
+            },
+        )
+        sources = client.get("/api/observation-sources").json()
+        assert sources["home_assistant"]["origin"] == "ui"
+        assert sources["home_assistant"]["url"] == "http://new-host:8123"
+
+        # removing the UI settings falls back to the environment ones
+        client.delete("/api/observation-sources/home-assistant")
+        sources = client.get("/api/observation-sources").json()
+        assert sources["home_assistant"]["origin"] == "environment"
+        assert sources["home_assistant"]["url"] == "http://old-host:8123"
+    storage.close()
+

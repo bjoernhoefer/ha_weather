@@ -192,37 +192,54 @@ class Storage:
         ``source`` is combined (e.g. ``"home_assistant+open_meteo"``) so it
         keeps reflecting every source that actually contributed a field,
         instead of only the last writer. Existing ``source`` values are
-        looked up in a single batched query to avoid one round trip per row.
+        looked up per location with a bounded ``target_date`` range (rather
+        than binding one parameter set per row) to avoid hitting SQLite's
+        bound-parameter limit on large batches, and the in-memory map is
+        updated as each row is merged so multiple rows for the same key
+        within one batch (e.g. Open-Meteo and Home Assistant outdoor rows
+        for the same day) are merged with each other too, not just with
+        what was already stored.
         """
         if not observations:
             return 0
         with self._lock:
-            keys = [
-                (observation.location_id, observation.target_date.isoformat(), observation.scope)
-                for observation in observations
-            ]
             existing_sources: Dict[Tuple[str, str, str], Optional[str]] = {}
-            conditions = " OR ".join(["(location_id = ? AND target_date = ? AND scope = ?)"] * len(keys))
-            params = [value for key in keys for value in key]
-            rows = self._connection.execute(
-                f"SELECT location_id, target_date, scope, source FROM observations WHERE {conditions}",
-                params,
-            )
-            for row in rows:
-                existing_sources[(row["location_id"], row["target_date"], row["scope"])] = row["source"]
+            dates_by_location: Dict[str, List[date]] = {}
+            for observation in observations:
+                dates_by_location.setdefault(observation.location_id, []).append(
+                    observation.target_date
+                )
+            for location_id, dates in dates_by_location.items():
+                rows = self._connection.execute(
+                    """
+                    SELECT target_date, scope, source FROM observations
+                    WHERE location_id = ? AND target_date BETWEEN ? AND ?
+                    """,
+                    (location_id, min(dates).isoformat(), max(dates).isoformat()),
+                )
+                for row in rows:
+                    existing_sources[(location_id, row["target_date"], row["scope"])] = row["source"]
 
-            upsert_rows = [
-                (
+            upsert_rows = []
+            for observation in observations:
+                key = (
                     observation.location_id,
                     observation.target_date.isoformat(),
                     observation.scope,
-                    observation.temperature_min,
-                    observation.temperature_max,
-                    observation.precipitation_mm,
-                    _merge_sources(existing_sources.get(key), observation.source),
                 )
-                for observation, key in zip(observations, keys)
-            ]
+                merged_source = _merge_sources(existing_sources.get(key), observation.source)
+                existing_sources[key] = merged_source
+                upsert_rows.append(
+                    (
+                        observation.location_id,
+                        observation.target_date.isoformat(),
+                        observation.scope,
+                        observation.temperature_min,
+                        observation.temperature_max,
+                        observation.precipitation_mm,
+                        merged_source,
+                    )
+                )
             self._connection.executemany(
                 """
                 INSERT INTO observations (location_id, target_date, scope,

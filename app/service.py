@@ -238,6 +238,12 @@ class WeatherService:
             )
         else:
             instance_id = ENVIRONMENT_INSTANCE_ID
+            if instance_id not in effective_instances(self.settings):
+                LOGGER.warning(
+                    "migrated Home Assistant measurements reference the "
+                    "environment instance, which is not configured; assign "
+                    "them to an instance under Real world measurements"
+                )
         for scope in ("indoor", "outdoor"):
             for location_id, entity_ids in (config.get(f"{scope}_entities") or {}).items():
                 for entity_id in entity_ids or []:

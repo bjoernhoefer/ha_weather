@@ -249,9 +249,7 @@ def test_source_control_persistence(storage):
 
 
 def test_hourly_predictions_keep_the_first_forecast_of_an_hour(storage):
-    from app.models import AggregatedHour
-
-    target = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0) + timedelta(hours=5)
+    target = now_utc().replace(minute=0, second=0, microsecond=0) + timedelta(hours=5)
     first = target - timedelta(hours=20)
     storage.save_hourly_predictions(
         "vienna", first, [AggregatedHour(target_time=target, temperature=10.0)]

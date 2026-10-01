@@ -3,8 +3,8 @@ from __future__ import annotations
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
-from app.clock import today_utc
-from app.models import CustomSource, DailyForecast, Observation, ProviderForecast, ProviderOverride
+from app.clock import now_utc, today_utc
+from app.models import AggregatedHour, CustomSource, DailyForecast, Observation, ProviderForecast, ProviderOverride
 from app.observations import observations_from_payload
 from app.storage import Storage
 
@@ -282,8 +282,13 @@ def test_ui_locations_and_measurements_round_trip(storage):
     )
     assert [item.id for item in storage.locations()] == ["graz"]
     assert storage.measurements()[0].id == measurement_id
+    now = now_utc().replace(minute=0, second=0, microsecond=0)
+    storage.save_hourly_predictions(
+        "graz", now, [AggregatedHour(target_time=now + timedelta(hours=1), temperature=5.0)]
+    )
     assert storage.delete_location("graz") is True
     assert storage.measurements() == []
+    assert storage.hourly_predictions("graz", now, now + timedelta(hours=2)) == {}
     storage.add_measurement(Measurement(instance_id="home", location_id="graz", entity_id="sensor.a"))
     assert storage.delete_ha_instance("home") is True
     assert storage.measurements() == []

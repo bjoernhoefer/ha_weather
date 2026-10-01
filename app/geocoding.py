@@ -61,5 +61,5 @@ async def lookup_timezone(
         response.raise_for_status()
         return response.json().get("timezone") or None
     except Exception as exc:  # noqa: BLE001 - UTC is a safe fallback
-        LOGGER.warning("time zone lookup failed for %s/%s: %s", latitude, longitude, exc)
+        LOGGER.warning("time zone lookup failed: %s", type(exc).__name__)
         return None

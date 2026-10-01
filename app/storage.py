@@ -657,17 +657,26 @@ class Storage:
             self._connection.commit()
 
     def delete_location(self, location_id: str) -> bool:
-        """Remove a UI location together with its measurements."""
+        """Remove a UI location together with its measurements and archived
+        data, so a later location with the same id starts from scratch."""
         with self._lock:
             cursor = self._connection.execute(
                 "DELETE FROM locations WHERE id = ?", (location_id,)
             )
-            if cursor.rowcount:
-                self._connection.execute(
-                    "DELETE FROM measurements WHERE location_id = ?", (location_id,)
-                )
+            deleted = cursor.rowcount > 0
+            if deleted:
+                for table in (
+                    "measurements",
+                    "hourly_predictions",
+                    "forecasts",
+                    "observations",
+                    "overrides",
+                ):
+                    self._connection.execute(
+                        f"DELETE FROM {table} WHERE location_id = ?", (location_id,)
+                    )
             self._connection.commit()
-        return cursor.rowcount > 0
+        return deleted
 
     # ------------------------------------------------------------------
     # hourly consensus archive (history of the last 24 hours)

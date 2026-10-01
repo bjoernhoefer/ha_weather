@@ -952,6 +952,8 @@
       }
 
       async function init() {
+        resetInstanceForm();
+        resetMeasurementForm();
         try {
           const items = await api("/api/locations");
           locations = items;

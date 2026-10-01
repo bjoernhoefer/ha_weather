@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -45,13 +45,22 @@ class ProviderForecast(BaseModel):
 
 
 class Observation(BaseModel):
-    """Measured values used as ground truth when scoring providers."""
+    """Measured values used as ground truth when scoring providers.
+
+    ``scope`` separates sensors placed inside the house from the ones
+    outside: only ``outdoor`` observations are comparable with the weather
+    providers, ``indoor`` readings are kept for other features (e.g. home
+    comfort) and are never used for provider scoring.
+    """
 
     location_id: str
     target_date: date
     temperature_min: Optional[float] = None
     temperature_max: Optional[float] = None
     precipitation_mm: Optional[float] = None
+    scope: Literal["indoor", "outdoor"] = "outdoor"
+    #: name of the :class:`ObservationSource` that produced this row
+    source: Optional[str] = None
 
 
 class ProviderScore(BaseModel):

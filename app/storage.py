@@ -29,10 +29,12 @@ CREATE TABLE IF NOT EXISTS forecasts (
 CREATE TABLE IF NOT EXISTS observations (
     location_id TEXT NOT NULL,
     target_date TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'outdoor',
     temperature_min REAL,
     temperature_max REAL,
     precipitation_mm REAL,
-    PRIMARY KEY (location_id, target_date)
+    source TEXT,
+    PRIMARY KEY (location_id, target_date, scope)
 );
 CREATE TABLE IF NOT EXISTS overrides (
     provider TEXT NOT NULL,
@@ -71,7 +73,45 @@ class Storage:
         self._connection.row_factory = sqlite3.Row
         with self._lock:
             self._connection.executescript(SCHEMA)
+            self._migrate_observations_scope()
             self._connection.commit()
+
+    def _migrate_observations_scope(self) -> None:
+        """Rebuild ``observations`` with the ``scope``/``source`` columns.
+
+        Databases created before indoor/outdoor tracking was added only have
+        a ``(location_id, target_date)`` primary key and no ``scope``/
+        ``source`` columns; existing rows are migrated as ``outdoor``.
+        """
+        columns = {
+            row["name"]
+            for row in self._connection.execute("PRAGMA table_info(observations)")
+        }
+        if "scope" in columns:
+            return
+        self._connection.executescript(
+            """
+            BEGIN;
+            ALTER TABLE observations RENAME TO observations_legacy;
+            CREATE TABLE observations (
+                location_id TEXT NOT NULL,
+                target_date TEXT NOT NULL,
+                scope TEXT NOT NULL DEFAULT 'outdoor',
+                temperature_min REAL,
+                temperature_max REAL,
+                precipitation_mm REAL,
+                source TEXT,
+                PRIMARY KEY (location_id, target_date, scope)
+            );
+            INSERT INTO observations (location_id, target_date, scope,
+                temperature_min, temperature_max, precipitation_mm, source)
+            SELECT location_id, target_date, 'outdoor',
+                temperature_min, temperature_max, precipitation_mm, NULL
+            FROM observations_legacy;
+            DROP TABLE observations_legacy;
+            COMMIT;
+            """
+        )
 
     def close(self) -> None:
         with self._lock:
@@ -145,9 +185,11 @@ class Storage:
             (
                 observation.location_id,
                 observation.target_date.isoformat(),
+                observation.scope,
                 observation.temperature_min,
                 observation.temperature_max,
                 observation.precipitation_mm,
+                observation.source,
             )
             for observation in observations
         ]
@@ -156,13 +198,14 @@ class Storage:
         with self._lock:
             self._connection.executemany(
                 """
-                INSERT INTO observations (location_id, target_date, temperature_min,
-                    temperature_max, precipitation_mm)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT (location_id, target_date)
+                INSERT INTO observations (location_id, target_date, scope,
+                    temperature_min, temperature_max, precipitation_mm, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (location_id, target_date, scope)
                 DO UPDATE SET temperature_min=excluded.temperature_min,
                     temperature_max=excluded.temperature_max,
-                    precipitation_mm=excluded.precipitation_mm
+                    precipitation_mm=excluded.precipitation_mm,
+                    source=excluded.source
                 """,
                 rows,
             )
@@ -170,10 +213,15 @@ class Storage:
         return len(rows)
 
     def observations(
-        self, location_id: str, since: Optional[date] = None
+        self, location_id: str, since: Optional[date] = None, scope: str = "outdoor"
     ) -> Dict[date, Observation]:
-        query = "SELECT * FROM observations WHERE location_id = ?"
-        params: List[object] = [location_id]
+        """Observations of one ``scope`` (``outdoor`` by default).
+
+        Provider accuracy scoring only ever uses outdoor readings - indoor
+        sensors are not comparable with weather provider forecasts.
+        """
+        query = "SELECT * FROM observations WHERE location_id = ? AND scope = ?"
+        params: List[object] = [location_id, scope]
         if since is not None:
             query += " AND target_date >= ?"
             params.append(since.isoformat())
@@ -188,6 +236,8 @@ class Storage:
                 temperature_min=row["temperature_min"],
                 temperature_max=row["temperature_max"],
                 precipitation_mm=row["precipitation_mm"],
+                scope=row["scope"],
+                source=row["source"],
             )
         return result
 

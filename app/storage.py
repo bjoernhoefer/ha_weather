@@ -189,58 +189,54 @@ class Storage:
         value (e.g. Open-Meteo's precipitation) is not wiped out by another
         source writing the same ``(location_id, target_date, scope)`` row
         without that field (e.g. Home Assistant/Elasticsearch temperatures).
-        ``source`` is combined (e.g. ``"open_meteo+home_assistant"``) so it
+        ``source`` is combined (e.g. ``"home_assistant+open_meteo"``) so it
         keeps reflecting every source that actually contributed a field,
-        instead of only the last writer.
+        instead of only the last writer. Existing ``source`` values are
+        looked up in a single batched query to avoid one round trip per row.
         """
         if not observations:
             return 0
         with self._lock:
-            for observation in observations:
-                existing = self._connection.execute(
-                    """
-                    SELECT temperature_min, temperature_max, precipitation_mm, source
-                    FROM observations WHERE location_id = ? AND target_date = ? AND scope = ?
-                    """,
-                    (
-                        observation.location_id,
-                        observation.target_date.isoformat(),
-                        observation.scope,
-                    ),
-                ).fetchone()
-                temperature_min = observation.temperature_min
-                temperature_max = observation.temperature_max
-                precipitation_mm = observation.precipitation_mm
-                source = observation.source
-                if existing is not None:
-                    if temperature_min is None:
-                        temperature_min = existing["temperature_min"]
-                    if temperature_max is None:
-                        temperature_max = existing["temperature_max"]
-                    if precipitation_mm is None:
-                        precipitation_mm = existing["precipitation_mm"]
-                    source = _merge_sources(existing["source"], observation.source)
-                self._connection.execute(
-                    """
-                    INSERT INTO observations (location_id, target_date, scope,
-                        temperature_min, temperature_max, precipitation_mm, source)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (location_id, target_date, scope)
-                    DO UPDATE SET temperature_min=excluded.temperature_min,
-                        temperature_max=excluded.temperature_max,
-                        precipitation_mm=excluded.precipitation_mm,
-                        source=excluded.source
-                    """,
-                    (
-                        observation.location_id,
-                        observation.target_date.isoformat(),
-                        observation.scope,
-                        temperature_min,
-                        temperature_max,
-                        precipitation_mm,
-                        source,
-                    ),
+            keys = [
+                (observation.location_id, observation.target_date.isoformat(), observation.scope)
+                for observation in observations
+            ]
+            existing_sources: Dict[Tuple[str, str, str], Optional[str]] = {}
+            conditions = " OR ".join(["(location_id = ? AND target_date = ? AND scope = ?)"] * len(keys))
+            params = [value for key in keys for value in key]
+            rows = self._connection.execute(
+                f"SELECT location_id, target_date, scope, source FROM observations WHERE {conditions}",
+                params,
+            )
+            for row in rows:
+                existing_sources[(row["location_id"], row["target_date"], row["scope"])] = row["source"]
+
+            upsert_rows = [
+                (
+                    observation.location_id,
+                    observation.target_date.isoformat(),
+                    observation.scope,
+                    observation.temperature_min,
+                    observation.temperature_max,
+                    observation.precipitation_mm,
+                    _merge_sources(existing_sources.get(key), observation.source),
                 )
+                for observation, key in zip(observations, keys)
+            ]
+            self._connection.executemany(
+                """
+                INSERT INTO observations (location_id, target_date, scope,
+                    temperature_min, temperature_max, precipitation_mm, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (location_id, target_date, scope)
+                DO UPDATE SET
+                    temperature_min=COALESCE(excluded.temperature_min, observations.temperature_min),
+                    temperature_max=COALESCE(excluded.temperature_max, observations.temperature_max),
+                    precipitation_mm=COALESCE(excluded.precipitation_mm, observations.precipitation_mm),
+                    source=excluded.source
+                """,
+                upsert_rows,
+            )
             self._connection.commit()
         return len(observations)
 
@@ -439,7 +435,7 @@ def _merge_sources(existing: Optional[str], new: Optional[str]) -> Optional[str]
     """Combine the ``source`` of two merged observation rows.
 
     Deduplicated and sorted so repeated refreshes from the same sources
-    don't keep growing the string (e.g. ``"open_meteo+home_assistant"``).
+    don't keep growing the string (e.g. ``"home_assistant+open_meteo"``).
     """
     if not existing:
         return new

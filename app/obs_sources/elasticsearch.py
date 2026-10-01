@@ -106,6 +106,7 @@ class ElasticsearchObservationSource(ObservationSource):
                                 "@timestamp": {
                                     "gte": f"now-{max(past_days, 1)}d/d",
                                     "lt": "now/d",
+                                    "time_zone": location.timezone,
                                 }
                             }
                         },

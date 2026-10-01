@@ -10,14 +10,14 @@ matching ``Observation.scope``.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import httpx
 
-from ..clock import today_utc
+from ..clock import now_utc
 from ..config import Location, Settings
 from ..models import Observation
 from .base import ObservationSource, register
@@ -26,6 +26,13 @@ LOGGER = logging.getLogger(__name__)
 
 #: the HTTP authentication scheme expected by Home Assistant's long-lived tokens
 AUTH_SCHEME = "Bearer"
+
+
+def _resolve_timezone(timezone_name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(timezone_name)
+    except Exception:  # noqa: BLE001 - invalid location timezone falls back to UTC
+        return ZoneInfo("UTC")
 
 
 def _entities_for(mapping: Dict[str, List[str]], location_id: str) -> List[str]:
@@ -45,18 +52,17 @@ def observations_from_history(
     scope: str,
     timezone_name: str = "UTC",
     start: Optional[date] = None,
+    end: Optional[date] = None,
 ) -> List[Observation]:
     """Aggregate a Home Assistant ``history/period`` response per local day.
 
-    ``minimal_response`` keeps the first entry of every entity's state at
-    ``start`` (which may predate the requested window) and drops
-    ``last_updated`` on the following ones, so days before ``start`` are
-    discarded and ``last_changed`` is preferred over ``last_updated``.
+    ``minimal_response`` keeps the first entry of every entity's state at the
+    window start (which may predate it) and drops ``last_updated`` on the
+    following ones, so days before ``start`` are discarded (``last_changed``
+    is preferred over ``last_updated``). ``end`` (exclusive) drops the still
+    changing, incomplete current local day, mirroring the Open-Meteo source.
     """
-    try:
-        tzinfo = ZoneInfo(timezone_name)
-    except Exception:  # noqa: BLE001 - invalid location timezone falls back to UTC
-        tzinfo = ZoneInfo("UTC")
+    tzinfo = _resolve_timezone(timezone_name)
 
     by_day: Dict[str, List[float]] = {}
     for series in history:
@@ -71,6 +77,8 @@ def observations_from_history(
                 continue
             local_date = when.astimezone(tzinfo).date()
             if start is not None and local_date < start:
+                continue
+            if end is not None and local_date >= end:
                 continue
             by_day.setdefault(local_date.isoformat(), []).append(value)
 
@@ -141,8 +149,14 @@ class HomeAssistantObservationSource(ObservationSource):
         location: Location,
         past_days: int = 7,
     ) -> List[Observation]:
-        end = datetime.combine(today_utc(), datetime.min.time(), tzinfo=timezone.utc)
-        start = end - timedelta(days=max(past_days, 1))
+        # the request window and the daily aggregation must use the same
+        # (local) day boundaries, otherwise the first/last day is incomplete
+        tzinfo = _resolve_timezone(location.timezone)
+        local_today = now_utc().astimezone(tzinfo).date()
+        local_start = local_today - timedelta(days=max(past_days, 1))
+        start = datetime.combine(local_start, datetime.min.time(), tzinfo=tzinfo)
+        end = datetime.combine(local_today, datetime.min.time(), tzinfo=tzinfo)
+
         observations: List[Observation] = []
         for scope, mapping in (
             ("indoor", settings.home_assistant_indoor_entities),
@@ -158,7 +172,8 @@ class HomeAssistantObservationSource(ObservationSource):
                     location.id,
                     scope,
                     timezone_name=location.timezone,
-                    start=start.date(),
+                    start=local_start,
+                    end=local_today,
                 )
             )
         return observations

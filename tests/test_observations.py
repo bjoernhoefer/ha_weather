@@ -94,6 +94,19 @@ def test_home_assistant_history_drops_days_before_the_requested_start():
     assert [item.target_date for item in observations] == [date(2024, 1, 1)]
 
 
+def test_home_assistant_history_drops_the_still_running_local_day():
+    history = [
+        [
+            {"state": "2.0", "last_changed": "2024-01-01T06:00:00+00:00"},
+            {"state": "3.0", "last_changed": "2024-01-02T06:00:00+00:00"},
+        ]
+    ]
+    observations = observations_from_history(
+        history, "vienna", "outdoor", end=date(2024, 1, 2)
+    )
+    assert [item.target_date for item in observations] == [date(2024, 1, 1)]
+
+
 def test_elasticsearch_source_requires_a_field_mapping():
     settings = Settings(
         database_path=":memory:",

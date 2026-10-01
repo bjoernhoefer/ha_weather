@@ -89,29 +89,33 @@ class Storage:
         }
         if "scope" in columns:
             return
-        self._connection.executescript(
-            """
-            BEGIN;
-            ALTER TABLE observations RENAME TO observations_legacy;
-            CREATE TABLE observations (
-                location_id TEXT NOT NULL,
-                target_date TEXT NOT NULL,
-                scope TEXT NOT NULL DEFAULT 'outdoor',
-                temperature_min REAL,
-                temperature_max REAL,
-                precipitation_mm REAL,
-                source TEXT,
-                PRIMARY KEY (location_id, target_date, scope)
-            );
-            INSERT INTO observations (location_id, target_date, scope,
-                temperature_min, temperature_max, precipitation_mm, source)
-            SELECT location_id, target_date, 'outdoor',
-                temperature_min, temperature_max, precipitation_mm, NULL
-            FROM observations_legacy;
-            DROP TABLE observations_legacy;
-            COMMIT;
-            """
-        )
+        try:
+            self._connection.executescript(
+                """
+                BEGIN;
+                ALTER TABLE observations RENAME TO observations_legacy;
+                CREATE TABLE observations (
+                    location_id TEXT NOT NULL,
+                    target_date TEXT NOT NULL,
+                    scope TEXT NOT NULL DEFAULT 'outdoor',
+                    temperature_min REAL,
+                    temperature_max REAL,
+                    precipitation_mm REAL,
+                    source TEXT,
+                    PRIMARY KEY (location_id, target_date, scope)
+                );
+                INSERT INTO observations (location_id, target_date, scope,
+                    temperature_min, temperature_max, precipitation_mm, source)
+                SELECT location_id, target_date, 'outdoor',
+                    temperature_min, temperature_max, precipitation_mm, NULL
+                FROM observations_legacy;
+                DROP TABLE observations_legacy;
+                COMMIT;
+                """
+            )
+        except Exception:
+            self._connection.rollback()
+            raise
 
     def close(self) -> None:
         with self._lock:

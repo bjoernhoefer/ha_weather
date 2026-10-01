@@ -76,6 +76,21 @@ def test_observations_merge_without_overwriting_with_null(storage):
     assert merged.precipitation_mm == 2.5
     assert merged.temperature_min == 10.0
     assert merged.temperature_max == 19.0
+    assert merged.source == "home_assistant+open_meteo"
+
+    # a third refresh from the same sources must not keep growing the string
+    storage.save_observations(
+        [
+            Observation(
+                location_id="vienna",
+                target_date=yesterday,
+                temperature_min=10.5,
+                scope="outdoor",
+                source="home_assistant",
+            )
+        ]
+    )
+    assert storage.observations("vienna")[yesterday].source == "home_assistant+open_meteo"
 
 
 def test_observations_round_trip(storage):

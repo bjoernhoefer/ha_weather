@@ -189,38 +189,60 @@ class Storage:
         value (e.g. Open-Meteo's precipitation) is not wiped out by another
         source writing the same ``(location_id, target_date, scope)`` row
         without that field (e.g. Home Assistant/Elasticsearch temperatures).
+        ``source`` is combined (e.g. ``"open_meteo+home_assistant"``) so it
+        keeps reflecting every source that actually contributed a field,
+        instead of only the last writer.
         """
-        rows = [
-            (
-                observation.location_id,
-                observation.target_date.isoformat(),
-                observation.scope,
-                observation.temperature_min,
-                observation.temperature_max,
-                observation.precipitation_mm,
-                observation.source,
-            )
-            for observation in observations
-        ]
-        if not rows:
+        if not observations:
             return 0
         with self._lock:
-            self._connection.executemany(
-                """
-                INSERT INTO observations (location_id, target_date, scope,
-                    temperature_min, temperature_max, precipitation_mm, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (location_id, target_date, scope)
-                DO UPDATE SET
-                    temperature_min=COALESCE(excluded.temperature_min, observations.temperature_min),
-                    temperature_max=COALESCE(excluded.temperature_max, observations.temperature_max),
-                    precipitation_mm=COALESCE(excluded.precipitation_mm, observations.precipitation_mm),
-                    source=COALESCE(excluded.source, observations.source)
-                """,
-                rows,
-            )
+            for observation in observations:
+                existing = self._connection.execute(
+                    """
+                    SELECT temperature_min, temperature_max, precipitation_mm, source
+                    FROM observations WHERE location_id = ? AND target_date = ? AND scope = ?
+                    """,
+                    (
+                        observation.location_id,
+                        observation.target_date.isoformat(),
+                        observation.scope,
+                    ),
+                ).fetchone()
+                temperature_min = observation.temperature_min
+                temperature_max = observation.temperature_max
+                precipitation_mm = observation.precipitation_mm
+                source = observation.source
+                if existing is not None:
+                    if temperature_min is None:
+                        temperature_min = existing["temperature_min"]
+                    if temperature_max is None:
+                        temperature_max = existing["temperature_max"]
+                    if precipitation_mm is None:
+                        precipitation_mm = existing["precipitation_mm"]
+                    source = _merge_sources(existing["source"], observation.source)
+                self._connection.execute(
+                    """
+                    INSERT INTO observations (location_id, target_date, scope,
+                        temperature_min, temperature_max, precipitation_mm, source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (location_id, target_date, scope)
+                    DO UPDATE SET temperature_min=excluded.temperature_min,
+                        temperature_max=excluded.temperature_max,
+                        precipitation_mm=excluded.precipitation_mm,
+                        source=excluded.source
+                    """,
+                    (
+                        observation.location_id,
+                        observation.target_date.isoformat(),
+                        observation.scope,
+                        temperature_min,
+                        temperature_max,
+                        precipitation_mm,
+                        source,
+                    ),
+                )
             self._connection.commit()
-        return len(rows)
+        return len(observations)
 
     def observations(
         self, location_id: str, since: Optional[date] = None, scope: str = "outdoor"
@@ -411,3 +433,17 @@ def forecast_rows_by_provider(
             (date.fromisoformat(row["target_date"]), row)
         )
     return grouped
+
+
+def _merge_sources(existing: Optional[str], new: Optional[str]) -> Optional[str]:
+    """Combine the ``source`` of two merged observation rows.
+
+    Deduplicated and sorted so repeated refreshes from the same sources
+    don't keep growing the string (e.g. ``"open_meteo+home_assistant"``).
+    """
+    if not existing:
+        return new
+    if not new:
+        return existing
+    parts = set(existing.split("+")) | set(new.split("+"))
+    return "+".join(sorted(parts))

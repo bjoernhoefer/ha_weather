@@ -130,9 +130,11 @@ All settings are environment variables prefixed with `HAW_`
 | `HAW_HOME_ASSISTANT_INDOOR_ENTITIES` / `HAW_HOME_ASSISTANT_OUTDOOR_ENTITIES` | `{}` | JSON object: `location_id` → list of entity ids of the `environment` instance |
 | `HAW_HOME_ASSISTANT_INSTANCES` | `[]` | JSON list of further instances: `[{"id": "garden", "name": "Garden", "url": "http://ha.local:8123", "token": "..."}]` |
 | `HAW_HOME_ASSISTANT_MEASUREMENTS` | `[]` | JSON list of measurements: `[{"instance_id": "garden", "location_id": "vienna", "entity_id": "sensor.outdoor", "scope": "outdoor"}]` |
-| `HAW_ELASTICSEARCH_URL` / `HAW_ELASTICSEARCH_API_KEY` / `HAW_ELASTICSEARCH_INDEX` | – | Elasticsearch observation source |
-| `HAW_ELASTICSEARCH_LOCATION_FIELD` | `location_id` | term field used to select a location's documents |
-| `HAW_ELASTICSEARCH_INDOOR_FIELDS` / `HAW_ELASTICSEARCH_OUTDOOR_FIELDS` | `{}` | JSON object: `location_id` → name of the temperature field |
+| `HAW_ELASTICSEARCH_URL` / `HAW_ELASTICSEARCH_API_KEY` / `HAW_ELASTICSEARCH_INDEX` | – | a single Elasticsearch instance (shown as the read-only instance `environment`) |
+| `HAW_ELASTICSEARCH_LOCATION_FIELD` | `location_id` | term field used to select a location's documents in the `environment` instance |
+| `HAW_ELASTICSEARCH_INDOOR_FIELDS` / `HAW_ELASTICSEARCH_OUTDOOR_FIELDS` | `{}` | JSON object: `location_id` → name of the temperature field of the `environment` instance |
+| `HAW_ELASTICSEARCH_INSTANCES` | `[]` | JSON list of further instances: `[{"id": "cloud", "name": "Elastic Cloud", "url": "https://...", "api_key": "...", "index": "weather", "location_field": "location_id"}]` |
+| `HAW_ELASTICSEARCH_MEASUREMENTS` | `[]` | JSON list of field mappings: `[{"instance_id": "cloud", "location_id": "vienna", "field": "outdoor_temp", "scope": "outdoor"}]` |
 
 Providers whose (free) API key is missing are simply skipped.
 
@@ -164,13 +166,24 @@ Two additional, pluggable sources can be enabled through
   *Home Assistant*.
 * **`elasticsearch`** – aggregates a numeric temperature field per day (daily
   `date_histogram` with `min`/`max` sub-aggregations) from any Elasticsearch
-  index, including the free Elastic Cloud tier. Configure `HAW_ELASTICSEARCH_URL`,
-  `HAW_ELASTICSEARCH_API_KEY` (sent as `ApiKey <key>`) and
-  `HAW_ELASTICSEARCH_INDEX`, then map the indoor/outdoor temperature field name
-  per location in `HAW_ELASTICSEARCH_INDOOR_FIELDS`/`HAW_ELASTICSEARCH_OUTDOOR_FIELDS`
-  (JSON object of `location_id -> field_name`). Documents are matched to a
-  location through `HAW_ELASTICSEARCH_LOCATION_FIELD` (a term filter, default
-  `location_id`) and must have a `@timestamp` field.
+  index, including the free Elastic Cloud tier. Like Home Assistant, any
+  number of **instances** can be added in the web UI (**Real world
+  measurements → Elasticsearch instances**: name, URL, API key - sent as
+  `ApiKey <key>` -, index and location field) or through
+  `HAW_ELASTICSEARCH_INSTANCES`; the classic `HAW_ELASTICSEARCH_URL` /
+  `_API_KEY` / `_INDEX` / `_LOCATION_FIELD` variables stay supported as the
+  read-only instance `environment` (with `HAW_ELASTICSEARCH_INDOOR_FIELDS` /
+  `HAW_ELASTICSEARCH_OUTDOOR_FIELDS` as its field mappings). Each **field**
+  entry couples a numeric temperature field of an instance with a location
+  and a scope (indoor/outdoor); maintain the list in the UI or via
+  `HAW_ELASTICSEARCH_MEASUREMENTS`. Documents are matched to a location
+  through the instance's location field (a term filter on the location id,
+  default `location_id`) and must have a `@timestamp` field. Several fields of
+  the same location/scope are combined per day (lowest minimum, highest
+  maximum); a failing instance is logged and skipped. Adding a field in the
+  UI enables the `elasticsearch` source automatically, deleting an instance or
+  location deletes its fields, and a previously saved single UI configuration
+  is migrated to an instance named *Elasticsearch*.
 
 When more than one source reports the same day/scope, temperature and
 precipitation fields are merged (a source's `None`/missing value never
@@ -203,6 +216,12 @@ others or the forecast refresh.
 | `POST /api/observation-sources/home-assistant/measurements` | add a measurement `{"instance_id": "garden", "location_id": "vienna", "entity_id": "sensor.outdoor", "scope": "outdoor", "name": ""}` |
 | `PUT /api/observation-sources/home-assistant/measurements/{id}` | update a measurement |
 | `DELETE /api/observation-sources/home-assistant/measurements/{id}` | remove a measurement |
+| `POST /api/observation-sources/elasticsearch/instances` | add an Elasticsearch instance `{"name": "Elastic Cloud", "url": "https://...", "api_key": "...", "index": "weather", "location_field": "location_id"}` |
+| `PUT /api/observation-sources/elasticsearch/instances/{id}` | update an instance; an empty API key keeps the stored one |
+| `DELETE /api/observation-sources/elasticsearch/instances/{id}` | remove an instance and its fields |
+| `POST /api/observation-sources/elasticsearch/measurements` | add a field mapping `{"instance_id": "elastic_cloud", "location_id": "vienna", "field": "outdoor_temp", "scope": "outdoor", "name": ""}` |
+| `PUT /api/observation-sources/elasticsearch/measurements/{id}` | update a field mapping |
+| `DELETE /api/observation-sources/elasticsearch/measurements/{id}` | remove a field mapping |
 | `GET /api/history/{location}` | last 24 hours: archived hourly prediction vs. measured values, MAE and bias |
 | `GET /api/providers` | registered providers and their availability |
 | `GET /api/sources` | source control: all built-in and custom sources with their state |

@@ -17,7 +17,8 @@ from .auth import require_api_key
 from .config import Settings, get_settings
 from .models import (
     CustomSource,
-    ElasticsearchSettingsIn,
+    ElasticsearchInstanceIn,
+    ElasticsearchMeasurementIn,
     ForecastHistory,
     HomeAssistantInstanceIn,
     LocationForecast,
@@ -365,28 +366,81 @@ def create_app(
     ) -> ObservationSourcesInfo:
         return _guard_measurements(service.delete_measurement, measurement_id)
 
-    @app.put(
-        "/api/observation-sources/elasticsearch",
+    @app.post(
+        "/api/observation-sources/elasticsearch/instances",
         response_model=ObservationSourcesInfo,
+        status_code=status.HTTP_201_CREATED,
         dependencies=protected,
     )
-    async def set_elasticsearch_settings(
-        body: ElasticsearchSettingsIn, service: WeatherService = Depends(get_service)
+    async def add_elasticsearch_instance(
+        body: ElasticsearchInstanceIn, service: WeatherService = Depends(get_service)
     ) -> ObservationSourcesInfo:
-        try:
-            return service.set_elasticsearch_settings(body)
-        except UnknownLocationError as exc:
-            raise _unknown_location(exc) from exc
+        return service.add_es_instance(body)
 
-    @app.delete(
-        "/api/observation-sources/elasticsearch",
+    @app.put(
+        "/api/observation-sources/elasticsearch/instances/{instance_id}",
         response_model=ObservationSourcesInfo,
         dependencies=protected,
     )
-    async def delete_elasticsearch_settings(
+    async def update_elasticsearch_instance(
+        instance_id: str,
+        body: ElasticsearchInstanceIn,
         service: WeatherService = Depends(get_service),
     ) -> ObservationSourcesInfo:
-        return service.delete_elasticsearch_settings()
+        return _guard_measurements(
+            service.update_es_instance, instance_id, body, source="Elasticsearch"
+        )
+
+    @app.delete(
+        "/api/observation-sources/elasticsearch/instances/{instance_id}",
+        response_model=ObservationSourcesInfo,
+        dependencies=protected,
+    )
+    async def delete_elasticsearch_instance(
+        instance_id: str, service: WeatherService = Depends(get_service)
+    ) -> ObservationSourcesInfo:
+        return _guard_measurements(
+            service.delete_es_instance, instance_id, source="Elasticsearch"
+        )
+
+    @app.post(
+        "/api/observation-sources/elasticsearch/measurements",
+        response_model=ObservationSourcesInfo,
+        status_code=status.HTTP_201_CREATED,
+        dependencies=protected,
+    )
+    async def add_elasticsearch_measurement(
+        body: ElasticsearchMeasurementIn, service: WeatherService = Depends(get_service)
+    ) -> ObservationSourcesInfo:
+        return _guard_measurements(
+            service.add_es_measurement, body, source="Elasticsearch"
+        )
+
+    @app.put(
+        "/api/observation-sources/elasticsearch/measurements/{measurement_id}",
+        response_model=ObservationSourcesInfo,
+        dependencies=protected,
+    )
+    async def update_elasticsearch_measurement(
+        measurement_id: int,
+        body: ElasticsearchMeasurementIn,
+        service: WeatherService = Depends(get_service),
+    ) -> ObservationSourcesInfo:
+        return _guard_measurements(
+            service.update_es_measurement, measurement_id, body, source="Elasticsearch"
+        )
+
+    @app.delete(
+        "/api/observation-sources/elasticsearch/measurements/{measurement_id}",
+        response_model=ObservationSourcesInfo,
+        dependencies=protected,
+    )
+    async def delete_elasticsearch_measurement(
+        measurement_id: int, service: WeatherService = Depends(get_service)
+    ) -> ObservationSourcesInfo:
+        return _guard_measurements(
+            service.delete_es_measurement, measurement_id, source="Elasticsearch"
+        )
 
     @app.get(
         "/api/forecast/{location_id}",
@@ -517,8 +571,8 @@ def _conflict(exc: ConflictError) -> HTTPException:
     return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
 
 
-def _guard_measurements(function, *args):
-    """Map the Home Assistant instance/measurement errors onto HTTP codes."""
+def _guard_measurements(function, *args, source: str = "Home Assistant"):
+    """Map the instance/measurement errors onto HTTP codes."""
     try:
         return function(*args)
     except UnknownLocationError as exc:
@@ -526,7 +580,7 @@ def _guard_measurements(function, *args):
     except UnknownInstanceError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Unknown Home Assistant instance '{exc}'",
+            detail=f"Unknown {source} instance '{exc}'",
         ) from exc
     except UnknownMeasurementError as exc:
         raise HTTPException(

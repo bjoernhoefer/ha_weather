@@ -10,7 +10,13 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .clock import now_utc, today_utc
-from .config import HomeAssistantInstance, Location, Measurement
+from .config import (
+    ElasticsearchInstance,
+    ElasticsearchMeasurement,
+    HomeAssistantInstance,
+    Location,
+    Measurement,
+)
 from .models import (
     AggregatedHour,
     CustomSource,
@@ -86,6 +92,23 @@ CREATE TABLE IF NOT EXISTS measurements (
     scope TEXT NOT NULL DEFAULT 'outdoor',
     name TEXT NOT NULL DEFAULT '',
     UNIQUE (instance_id, location_id, entity_id, scope)
+);
+CREATE TABLE IF NOT EXISTS es_instances (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    url TEXT,
+    api_key TEXT,
+    "index" TEXT,
+    location_field TEXT NOT NULL DEFAULT 'location_id'
+);
+CREATE TABLE IF NOT EXISTS es_measurements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instance_id TEXT NOT NULL,
+    location_id TEXT NOT NULL,
+    field TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'outdoor',
+    name TEXT NOT NULL DEFAULT '',
+    UNIQUE (instance_id, location_id, field, scope)
 );
 CREATE TABLE IF NOT EXISTS locations (
     id TEXT PRIMARY KEY,
@@ -616,6 +639,126 @@ class Storage:
         return cursor.rowcount > 0
 
     # ------------------------------------------------------------------
+    # Elasticsearch instances and field mappings (web UI)
+    # ------------------------------------------------------------------
+    def es_instances(self) -> List[ElasticsearchInstance]:
+        with self._lock:
+            rows = list(self._connection.execute("SELECT * FROM es_instances ORDER BY name, id"))
+        return [
+            ElasticsearchInstance(
+                id=row["id"],
+                name=row["name"],
+                url=row["url"],
+                api_key=row["api_key"],
+                index=row["index"],
+                location_field=row["location_field"],
+            )
+            for row in rows
+        ]
+
+    def save_es_instance(self, instance: ElasticsearchInstance) -> None:
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO es_instances (id, name, url, api_key, "index", location_field)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET name=excluded.name, url=excluded.url,
+                    api_key=excluded.api_key, "index"=excluded."index",
+                    location_field=excluded.location_field
+                """,
+                (
+                    instance.id,
+                    instance.name,
+                    instance.url,
+                    instance.api_key,
+                    instance.index,
+                    instance.location_field,
+                ),
+            )
+            self._connection.commit()
+
+    def delete_es_instance(self, instance_id: str) -> bool:
+        """Remove an instance together with all of its field mappings."""
+        with self._lock:
+            cursor = self._connection.execute(
+                "DELETE FROM es_instances WHERE id = ?", (instance_id,)
+            )
+            self._connection.execute(
+                "DELETE FROM es_measurements WHERE instance_id = ?", (instance_id,)
+            )
+            self._connection.commit()
+        return cursor.rowcount > 0
+
+    def es_measurements(self) -> List[ElasticsearchMeasurement]:
+        with self._lock:
+            rows = list(
+                self._connection.execute(
+                    "SELECT * FROM es_measurements ORDER BY location_id, scope, field, id"
+                )
+            )
+        return [
+            ElasticsearchMeasurement(
+                id=row["id"],
+                instance_id=row["instance_id"],
+                location_id=row["location_id"],
+                field=row["field"],
+                scope=row["scope"],
+                name=row["name"],
+            )
+            for row in rows
+        ]
+
+    def add_es_measurement(self, measurement: ElasticsearchMeasurement) -> int:
+        """Insert a field mapping, raises :class:`sqlite3.IntegrityError` for duplicates."""
+        with self._lock:
+            cursor = self._connection.execute(
+                """
+                INSERT INTO es_measurements (instance_id, location_id, field, scope, name)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    measurement.instance_id,
+                    measurement.location_id,
+                    measurement.field,
+                    measurement.scope,
+                    measurement.name,
+                ),
+            )
+            self._connection.commit()
+        return int(cursor.lastrowid)
+
+    def update_es_measurement(
+        self, measurement_id: int, measurement: ElasticsearchMeasurement
+    ) -> bool:
+        """Update a field mapping, raises :class:`sqlite3.IntegrityError` for duplicates."""
+        with self._lock:
+            cursor = self._connection.execute(
+                """
+                UPDATE es_measurements SET instance_id = ?, location_id = ?,
+                    field = ?, scope = ?, name = ?
+                WHERE id = ?
+                """,
+                (
+                    measurement.instance_id,
+                    measurement.location_id,
+                    measurement.field,
+                    measurement.scope,
+                    measurement.name,
+                    measurement_id,
+                ),
+            )
+            self._connection.commit()
+        return cursor.rowcount > 0
+
+    def delete_es_measurement(self, measurement_id: int) -> bool:
+        with self._lock:
+            cursor = self._connection.execute(
+                "DELETE FROM es_measurements WHERE id = ?", (measurement_id,)
+            )
+            self._connection.commit()
+        return cursor.rowcount > 0
+
+    # ------------------------------------------------------------------
     # locations added in the web UI
     # ------------------------------------------------------------------
     def locations(self) -> List[Location]:
@@ -667,6 +810,7 @@ class Storage:
             if deleted:
                 for table in (
                     "measurements",
+                    "es_measurements",
                     "hourly_predictions",
                     "forecasts",
                     "observations",

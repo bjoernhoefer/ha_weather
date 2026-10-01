@@ -20,6 +20,8 @@ from .clock import now_utc, today_utc
 from .config import (
     DEFAULT_ELASTICSEARCH_LOCATION_FIELD,
     ENVIRONMENT_INSTANCE_ID,
+    ElasticsearchInstance,
+    ElasticsearchMeasurement,
     HomeAssistantInstance,
     Location,
     Measurement,
@@ -29,7 +31,10 @@ from .geocoding import geocode, lookup_timezone
 from .models import (
     MAX_ENTITIES_PER_LOCATION,
     CustomSource,
-    ElasticsearchSettingsIn,
+    ElasticsearchInstanceIn,
+    ElasticsearchInstanceInfo,
+    ElasticsearchMeasurementIn,
+    ElasticsearchMeasurementInfo,
     ElasticsearchSettingsInfo,
     ForecastHistory,
     HistoryHour,
@@ -52,6 +57,7 @@ from .models import (
 )
 from .observations import fetch_observations
 from .obs_sources import ObservationSource, registered_sources
+from .obs_sources import elasticsearch as es_source
 from .obs_sources.home_assistant import (
     HomeAssistantObservationSource,
     effective_instances,
@@ -130,6 +136,7 @@ class WeatherService:
         self._client_factory = client_factory or self._default_client
         self._cache: Dict[str, LocationForecast] = {}
         self._migrate_legacy_home_assistant()
+        self._migrate_legacy_elasticsearch()
         self.reload_providers()
 
     def _default_client(self) -> httpx.AsyncClient:
@@ -169,6 +176,7 @@ class WeatherService:
         applies UI-entered API keys: UI values win over environment ones.
         """
         update: Dict[str, object] = {}
+        sources = list(self.settings.observation_sources)
         instances = self.storage.ha_instances()
         measurements = self.storage.measurements()
         if instances:
@@ -181,27 +189,28 @@ class WeatherService:
                 *self.settings.home_assistant_measurements,
                 *measurements,
             ]
-            # measurements added in the web UI are meant to be used, no
-            # need to also list the source in HAW_OBSERVATION_SOURCES
-            if "home_assistant" not in self.settings.observation_sources:
-                update["observation_sources"] = [
-                    *self.settings.observation_sources,
-                    "home_assistant",
-                ]
-        es_config = self.storage.observation_source_settings("elasticsearch")
-        if es_config:
-            if "url" in es_config:
-                update["elasticsearch_url"] = es_config["url"]
-            if es_config.get("api_key"):
-                update["elasticsearch_api_key"] = es_config["api_key"]
-            if "index" in es_config:
-                update["elasticsearch_index"] = es_config["index"]
-            if "location_field" in es_config:
-                update["elasticsearch_location_field"] = es_config["location_field"]
-            if "indoor_fields" in es_config:
-                update["elasticsearch_indoor_fields"] = es_config["indoor_fields"]
-            if "outdoor_fields" in es_config:
-                update["elasticsearch_outdoor_fields"] = es_config["outdoor_fields"]
+        es_instances = self.storage.es_instances()
+        es_measurements = self.storage.es_measurements()
+        if es_instances:
+            update["elasticsearch_instances"] = [
+                *self.settings.elasticsearch_instances,
+                *es_instances,
+            ]
+        if es_measurements:
+            update["elasticsearch_measurements"] = [
+                *self.settings.elasticsearch_measurements,
+                *es_measurements,
+            ]
+        # measurements added in the web UI are meant to be used, no need to
+        # also list the source in HAW_OBSERVATION_SOURCES
+        for name, added in (
+            ("home_assistant", measurements),
+            ("elasticsearch", es_measurements),
+        ):
+            if added and name not in sources:
+                sources.append(name)
+        if sources != self.settings.observation_sources:
+            update["observation_sources"] = sources
         return self.settings.model_copy(update=update) if update else self.settings
 
     @staticmethod
@@ -260,6 +269,59 @@ class WeatherService:
                         continue
         self.storage.delete_observation_source_settings("home_assistant")
         LOGGER.info("migrated the Home Assistant settings to instance '%s'", instance_id)
+
+    def _migrate_legacy_elasticsearch(self) -> None:
+        """Convert the former single Elasticsearch UI configuration (one
+        URL/API key/index plus per-location field mappings) into an instance
+        with a list of field mappings."""
+        config = self.storage.observation_source_settings("elasticsearch")
+        if not config:
+            return
+        if config.get("url") or config.get("api_key") or config.get("index"):
+            instance_id = _unique_id(
+                "elasticsearch", self._es_instance_ids() | {ENVIRONMENT_INSTANCE_ID}
+            )
+            self.storage.save_es_instance(
+                ElasticsearchInstance(
+                    id=instance_id,
+                    name="Elasticsearch",
+                    url=config.get("url") or self.settings.elasticsearch_url,
+                    api_key=config.get("api_key") or self.settings.elasticsearch_api_key,
+                    index=config.get("index") or self.settings.elasticsearch_index,
+                    location_field=config.get("location_field")
+                    or self.settings.elasticsearch_location_field,
+                )
+            )
+        else:
+            instance_id = ENVIRONMENT_INSTANCE_ID
+            if instance_id not in es_source.effective_instances(self.settings):
+                LOGGER.warning(
+                    "migrated Elasticsearch fields reference the environment "
+                    "instance, which is not configured; assign them to an "
+                    "instance under Real world measurements"
+                )
+        for scope in ("indoor", "outdoor"):
+            for location_id, field in (config.get(f"{scope}_fields") or {}).items():
+                if not field:
+                    continue
+                try:
+                    self.storage.add_es_measurement(
+                        ElasticsearchMeasurement(
+                            instance_id=instance_id,
+                            location_id=location_id,
+                            field=field,
+                            scope=scope,
+                        )
+                    )
+                except sqlite3.IntegrityError:
+                    continue
+        self.storage.delete_observation_source_settings("elasticsearch")
+        LOGGER.info("migrated the Elasticsearch settings to instance '%s'", instance_id)
+
+    def _es_instance_ids(self) -> set:
+        return set(es_source.effective_instances(self.settings)) | {
+            item.id for item in self.storage.es_instances()
+        }
 
     def _instance_ids(self) -> set:
         return set(effective_instances(self.settings)) | {
@@ -400,80 +462,153 @@ class WeatherService:
             raise UnknownMeasurementError(str(measurement_id))
         return self.observation_sources_status()
 
+    def elasticsearch_status(self) -> ElasticsearchSettingsInfo:
+        settings = self.observation_settings()
+        environment_instances = es_source.effective_instances(self.settings)
+        stored_instances = [
+            item
+            for item in self.storage.es_instances()
+            if item.id not in environment_instances
+        ]
+        environment_measurements = es_source.effective_measurements(self.settings)
+        stored_measurements = self.storage.es_measurements()
+        counts = Counter(
+            item.instance_id
+            for item in [*environment_measurements, *stored_measurements]
+        )
+        instances = [
+            ElasticsearchInstanceInfo(
+                id=item.id,
+                name=item.name,
+                url=item.url,
+                index=item.index,
+                location_field=item.location_field,
+                api_key_set=bool(item.api_key),
+                origin=origin,
+                configured=es_source.usable(item),
+                measurement_count=counts[item.id],
+            )
+            for origin, items in (
+                ("environment", environment_instances.values()),
+                ("ui", stored_instances),
+            )
+            for item in items
+        ]
+        measurements = [
+            ElasticsearchMeasurementInfo(**item.model_dump(), origin=origin)
+            for origin, items in (
+                ("environment", environment_measurements),
+                ("ui", stored_measurements),
+            )
+            for item in items
+        ]
+        return ElasticsearchSettingsInfo(
+            configured=any(item.configured for item in instances),
+            enabled="elasticsearch" in settings.observation_sources,
+            instances=instances,
+            measurements=measurements,
+        )
+
     def observation_sources_status(self) -> ObservationSourcesInfo:
         """Current Home Assistant/Elasticsearch configuration for the UI."""
-        settings = self.observation_settings()
-        es_config = self.storage.observation_source_settings("elasticsearch") or {}
-        es_source = self._built_in_observation_source("elasticsearch", settings)
-        es_origin = None
-        if es_config:
-            es_origin = "ui"
-        elif (
-            self.settings.elasticsearch_url
-            or self.settings.elasticsearch_api_key
-            or self.settings.elasticsearch_index
-        ):
-            es_origin = "environment"
-        elasticsearch = ElasticsearchSettingsInfo(
-            configured=bool(
-                settings.elasticsearch_url
-                and settings.elasticsearch_api_key
-                and settings.elasticsearch_index
-            ),
-            available=es_source.is_available(),
-            origin=es_origin,
-            url=settings.elasticsearch_url,
-            index=settings.elasticsearch_index,
-            location_field=settings.elasticsearch_location_field,
-            indoor_fields=settings.elasticsearch_indoor_fields,
-            outdoor_fields=settings.elasticsearch_outdoor_fields,
-        )
         return ObservationSourcesInfo(
-            home_assistant=self.home_assistant_status(), elasticsearch=elasticsearch
+            home_assistant=self.home_assistant_status(),
+            elasticsearch=self.elasticsearch_status(),
         )
 
-    def set_elasticsearch_settings(
-        self, settings_in: ElasticsearchSettingsIn
-    ) -> ObservationSourcesInfo:
-        self.location(settings_in.location_id)  # raises UnknownLocationError
-        config = self.storage.observation_source_settings("elasticsearch") or {}
-        # The UI always resubmits the full URL/index fields (unlike the
-        # write-only API key), so an empty value clears the stored one.
-        config["url"] = settings_in.url
-        if settings_in.api_key:
-            config["api_key"] = settings_in.api_key
-        config["index"] = settings_in.index
-        # Empty clears back to the default, same as url/index above.
-        config["location_field"] = settings_in.location_field or DEFAULT_ELASTICSEARCH_LOCATION_FIELD
-        indoor_fields = dict(config.get("indoor_fields") or {})
-        outdoor_fields = dict(config.get("outdoor_fields") or {})
-        if settings_in.indoor_field:
-            indoor_fields[settings_in.location_id] = settings_in.indoor_field
-        else:
-            indoor_fields.pop(settings_in.location_id, None)
-        if settings_in.outdoor_field:
-            outdoor_fields[settings_in.location_id] = settings_in.outdoor_field
-        else:
-            outdoor_fields.pop(settings_in.location_id, None)
-        config["indoor_fields"] = indoor_fields
-        config["outdoor_fields"] = outdoor_fields
-        if not (
-            config.get("url")
-            or config.get("api_key")
-            or config.get("index")
-            or indoor_fields
-            or outdoor_fields
-        ):
-            # Nothing meaningful left to store (e.g. an empty form was
-            # submitted) - remove the row so the environment configuration,
-            # if any, takes effect again instead of a stale "ui" origin.
-            self.storage.delete_observation_source_settings("elasticsearch")
-        else:
-            self.storage.set_observation_source_settings("elasticsearch", config)
+    def _stored_es_instance(self, instance_id: str) -> ElasticsearchInstance:
+        for item in self.storage.es_instances():
+            if item.id == instance_id:
+                return item
+        if instance_id in es_source.effective_instances(self.settings):
+            raise ConflictError(
+                f"instance '{instance_id}' is configured through the environment"
+            )
+        raise UnknownInstanceError(instance_id)
+
+    def add_es_instance(self, body: ElasticsearchInstanceIn) -> ObservationSourcesInfo:
+        instance_id = _unique_id(
+            _slug(body.name, "elasticsearch"),
+            self._es_instance_ids() | {ENVIRONMENT_INSTANCE_ID},
+        )
+        self.storage.save_es_instance(
+            ElasticsearchInstance(
+                id=instance_id,
+                name=body.name,
+                url=body.url,
+                api_key=body.api_key,
+                index=body.index,
+                location_field=body.location_field or DEFAULT_ELASTICSEARCH_LOCATION_FIELD,
+            )
+        )
         return self.observation_sources_status()
 
-    def delete_elasticsearch_settings(self) -> ObservationSourcesInfo:
-        self.storage.delete_observation_source_settings("elasticsearch")
+    def update_es_instance(
+        self, instance_id: str, body: ElasticsearchInstanceIn
+    ) -> ObservationSourcesInfo:
+        stored = self._stored_es_instance(instance_id)
+        self.storage.save_es_instance(
+            ElasticsearchInstance(
+                id=instance_id,
+                name=body.name,
+                # URL/index/location field are always resubmitted, the API
+                # key is write-only: an empty key keeps the stored one
+                url=body.url,
+                api_key=body.api_key or stored.api_key,
+                index=body.index,
+                location_field=body.location_field or DEFAULT_ELASTICSEARCH_LOCATION_FIELD,
+            )
+        )
+        return self.observation_sources_status()
+
+    def delete_es_instance(self, instance_id: str) -> ObservationSourcesInfo:
+        self._stored_es_instance(instance_id)
+        self.storage.delete_es_instance(instance_id)
+        return self.observation_sources_status()
+
+    def _check_es_measurement(
+        self, body: ElasticsearchMeasurementIn, ignore_id: Optional[int] = None
+    ) -> ElasticsearchMeasurement:
+        self.location(body.location_id)  # raises UnknownLocationError
+        if body.instance_id not in self._es_instance_ids():
+            raise UnknownInstanceError(body.instance_id)
+        same_slot = [
+            item
+            for item in es_source.effective_measurements(self.observation_settings())
+            if item.location_id == body.location_id
+            and item.scope == body.scope
+            and (ignore_id is None or item.id != ignore_id)
+        ]
+        if len(same_slot) >= MAX_ENTITIES_PER_LOCATION:
+            raise ConflictError(
+                f"at most {MAX_ENTITIES_PER_LOCATION} {body.scope} Elasticsearch "
+                "fields per location"
+            )
+        return ElasticsearchMeasurement(**body.model_dump())
+
+    def add_es_measurement(self, body: ElasticsearchMeasurementIn) -> ObservationSourcesInfo:
+        measurement = self._check_es_measurement(body)
+        try:
+            self.storage.add_es_measurement(measurement)
+        except sqlite3.IntegrityError as exc:
+            raise ConflictError("this Elasticsearch field mapping already exists") from exc
+        return self.observation_sources_status()
+
+    def update_es_measurement(
+        self, measurement_id: int, body: ElasticsearchMeasurementIn
+    ) -> ObservationSourcesInfo:
+        if not any(item.id == measurement_id for item in self.storage.es_measurements()):
+            raise UnknownMeasurementError(str(measurement_id))
+        measurement = self._check_es_measurement(body, ignore_id=measurement_id)
+        try:
+            self.storage.update_es_measurement(measurement_id, measurement)
+        except sqlite3.IntegrityError as exc:
+            raise ConflictError("this Elasticsearch field mapping already exists") from exc
+        return self.observation_sources_status()
+
+    def delete_es_measurement(self, measurement_id: int) -> ObservationSourcesInfo:
+        if not self.storage.delete_es_measurement(measurement_id):
+            raise UnknownMeasurementError(str(measurement_id))
         return self.observation_sources_status()
 
     def reload_providers(self) -> None:

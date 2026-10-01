@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Dict, List, Literal, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -299,43 +299,100 @@ class HomeAssistantSettingsInfo(BaseModel):
     measurements: List[MeasurementInfo] = Field(default_factory=list)
 
 
-class ElasticsearchSettingsIn(BaseModel):
-    """Access details for the Elasticsearch observation source.
+class ElasticsearchInstanceIn(BaseModel):
+    """An Elasticsearch deployment/index entered in the web UI.
 
+    ``api_key`` is optional when updating: an empty value keeps the key
+    already stored (so the web UI never has to display a saved secret).
     Overlong input is truncated rather than rejected, mirroring the HTML
     ``maxlength`` attributes used by the web UI.
     """
 
+    name: str = Field(min_length=1, max_length=MAX_SETTING_LENGTH)
     url: Optional[str] = None
     api_key: Optional[str] = None
     index: Optional[str] = None
     location_field: Optional[str] = None
-    location_id: str
-    indoor_field: Optional[str] = None
-    outdoor_field: Optional[str] = None
+
+    @field_validator("name", mode="after")
+    @classmethod
+    def _strip_name(cls, value: str) -> str:
+        value = value.strip()[:MAX_NAME_LENGTH]
+        if not value:
+            raise ValueError("name must not be empty")
+        return value
 
     @field_validator("url", "api_key", "index", mode="after")
     @classmethod
     def _strip_and_truncate(cls, value: Optional[str]) -> Optional[str]:
         return _truncate(value, MAX_SETTING_LENGTH)
 
-    @field_validator("location_field", "indoor_field", "outdoor_field", mode="after")
+    @field_validator("location_field", mode="after")
     @classmethod
-    def _strip_and_truncate_entity(cls, value: Optional[str]) -> Optional[str]:
+    def _strip_and_truncate_field(cls, value: Optional[str]) -> Optional[str]:
         return _truncate(value, MAX_ENTITY_LENGTH)
 
 
-class ElasticsearchSettingsInfo(BaseModel):
-    """Current Elasticsearch configuration, as shown in the web UI."""
+class ElasticsearchInstanceInfo(BaseModel):
+    """An Elasticsearch instance as shown in the web UI (no API key)."""
 
-    configured: bool
-    available: bool
-    origin: Optional[str] = None
+    id: str
+    name: str
     url: Optional[str] = None
     index: Optional[str] = None
     location_field: str = DEFAULT_ELASTICSEARCH_LOCATION_FIELD
-    indoor_fields: Dict[str, str] = Field(default_factory=dict)
-    outdoor_fields: Dict[str, str] = Field(default_factory=dict)
+    api_key_set: bool = False
+    #: ``"ui"`` (editable) or ``"environment"`` (read only)
+    origin: str = "ui"
+    #: ``True`` when URL, API key and index are set
+    configured: bool = False
+    measurement_count: int = 0
+
+
+class ElasticsearchMeasurementIn(BaseModel):
+    """A numeric temperature field coupled with an instance and a location."""
+
+    instance_id: str = Field(min_length=1, max_length=40)
+    location_id: str = Field(min_length=1, max_length=40)
+    field: str = Field(
+        min_length=1, max_length=MAX_ENTITY_LENGTH, pattern=r"^[A-Za-z0-9_@.\-]+$"
+    )
+    scope: Literal["indoor", "outdoor"] = "outdoor"
+    name: str = Field(default="", max_length=MAX_SETTING_LENGTH)
+
+    @field_validator("field", mode="before")
+    @classmethod
+    def _strip_field(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("name", mode="after")
+    @classmethod
+    def _strip_name(cls, value: str) -> str:
+        return value.strip()[:MAX_NAME_LENGTH]
+
+
+class ElasticsearchMeasurementInfo(BaseModel):
+    """An Elasticsearch field mapping as shown in the web UI."""
+
+    id: Optional[int] = None
+    instance_id: str
+    location_id: str
+    field: str
+    scope: str
+    name: str = ""
+    #: ``"ui"`` (editable) or ``"environment"`` (read only)
+    origin: str = "ui"
+
+
+class ElasticsearchSettingsInfo(BaseModel):
+    """All Elasticsearch instances and field mappings, as shown in the web UI."""
+
+    #: ``True`` when at least one instance has a URL, an API key and an index
+    configured: bool = False
+    #: ``True`` when the ``elasticsearch`` observation source is queried
+    enabled: bool = False
+    instances: List[ElasticsearchInstanceInfo] = Field(default_factory=list)
+    measurements: List[ElasticsearchMeasurementInfo] = Field(default_factory=list)
 
 
 class ObservationSourcesInfo(BaseModel):

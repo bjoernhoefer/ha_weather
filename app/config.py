@@ -53,6 +53,31 @@ class Measurement(BaseModel):
     name: str = ""
 
 
+class ElasticsearchInstance(BaseModel):
+    """One Elasticsearch deployment/index that temperature fields are read from."""
+
+    id: str = Field(pattern=r"^[a-z0-9_]{1,40}$")
+    name: str = Field(min_length=1, max_length=100)
+    url: Optional[str] = None
+    api_key: Optional[str] = None
+    index: Optional[str] = None
+    #: term field used to select the documents of a location
+    location_field: str = DEFAULT_ELASTICSEARCH_LOCATION_FIELD
+
+
+class ElasticsearchMeasurement(BaseModel):
+    """One numeric temperature field coupled with an Elasticsearch instance
+    and a location."""
+
+    #: database id, ``None`` for measurements from the environment
+    id: Optional[int] = None
+    instance_id: str
+    location_id: str
+    field: str
+    scope: Literal["indoor", "outdoor"] = "outdoor"
+    name: str = ""
+
+
 DEFAULT_LOCATIONS: List[Location] = [
     Location(
         id="vienna",
@@ -131,6 +156,10 @@ class Settings(BaseSettings):
     elasticsearch_indoor_fields: Dict[str, str] = Field(default_factory=dict)
     #: ``location_id`` -> name of the outdoor temperature field
     elasticsearch_outdoor_fields: Dict[str, str] = Field(default_factory=dict)
+    #: additional Elasticsearch deployments (JSON list), e.g. managed in the web UI
+    elasticsearch_instances: List[ElasticsearchInstance] = Field(default_factory=list)
+    #: temperature fields coupled with an instance and a location (JSON list)
+    elasticsearch_measurements: List[ElasticsearchMeasurement] = Field(default_factory=list)
 
     # --- Azure AI Foundry verification ---------------------------------
     azure_foundry_endpoint: Optional[str] = None
@@ -170,6 +199,8 @@ class Settings(BaseSettings):
     @field_validator(
         "home_assistant_instances",
         "home_assistant_measurements",
+        "elasticsearch_instances",
+        "elasticsearch_measurements",
         mode="before",
     )
     @classmethod

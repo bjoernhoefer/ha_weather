@@ -381,13 +381,9 @@ def test_observation_sources_are_initially_unconfigured(api):
     }
     assert payload["elasticsearch"] == {
         "configured": False,
-        "available": False,
-        "origin": None,
-        "url": None,
-        "index": None,
-        "location_field": "location_id",
-        "indoor_fields": {},
-        "outdoor_fields": {},
+        "enabled": False,
+        "instances": [],
+        "measurements": [],
     }
 
 
@@ -560,87 +556,216 @@ def test_deleting_an_instance_removes_its_measurements(api):
     assert api.delete("/api/observation-sources/home-assistant/instances/home").status_code == 404
 
 
-def test_elasticsearch_settings_are_accepted_and_stored(api):
-    response = api.put(
-        "/api/observation-sources/elasticsearch",
+def _add_es_instance(api, name="Elastic Cloud", api_key="secret-key", **extra):
+    response = api.post(
+        "/api/observation-sources/elasticsearch/instances",
         json={
+            "name": name,
             "url": "https://my-deployment.es.io",
-            "api_key": "secret-key",
+            "api_key": api_key,
             "index": "weather",
-            "location_field": "loc",
-            "location_id": "vienna",
-            "indoor_field": "indoor_temp",
-            "outdoor_field": "outdoor_temp",
+            **extra,
         },
     )
-    assert response.status_code == 200
-    assert "secret-key" not in response.text  # the key is never returned
-    elasticsearch = response.json()["elasticsearch"]
-    assert elasticsearch["configured"] is True
-    assert elasticsearch["available"] is True
-    assert elasticsearch["origin"] == "ui"
-    assert elasticsearch["url"] == "https://my-deployment.es.io"
-    assert elasticsearch["index"] == "weather"
-    assert elasticsearch["location_field"] == "loc"
-    assert elasticsearch["indoor_fields"] == {"vienna": "indoor_temp"}
-    assert elasticsearch["outdoor_fields"] == {"vienna": "outdoor_temp"}
+    assert response.status_code == 201, response.text
+    return response
 
-    reloaded = api.get("/api/observation-sources").json()["elasticsearch"]
-    assert reloaded == elasticsearch
+
+def test_elasticsearch_instances_can_be_added(api):
+    response = _add_es_instance(api, location_field="loc")
+    assert "secret-key" not in response.text  # the key is never returned
+    _add_es_instance(api, name="Mallorca", api_key="k2")
+    _add_es_instance(api, name="Mallorca", api_key="k3")
+
+    elasticsearch = api.get("/api/observation-sources").json()["elasticsearch"]
+    assert elasticsearch["configured"] is True
+    instances = {item["id"]: item for item in elasticsearch["instances"]}
+    assert set(instances) == {"elastic_cloud", "mallorca", "mallorca_2"}
+    assert instances["elastic_cloud"] == {
+        "id": "elastic_cloud",
+        "name": "Elastic Cloud",
+        "url": "https://my-deployment.es.io",
+        "index": "weather",
+        "location_field": "loc",
+        "api_key_set": True,
+        "origin": "ui",
+        "configured": True,
+        "measurement_count": 0,
+    }
+    assert instances["mallorca"]["location_field"] == "location_id"
+    assert "secret-key" not in api.get("/api/observation-sources").text
+
+
+def test_elasticsearch_api_key_is_kept_when_not_resubmitted(api):
+    _add_es_instance(api)
+    response = api.put(
+        "/api/observation-sources/elasticsearch/instances/elastic_cloud",
+        json={"name": "Home cluster", "url": "https://other.es.io", "index": "sensors"},
+    )
+    assert response.status_code == 200
+    (instance,) = response.json()["elasticsearch"]["instances"]
+    assert (instance["name"], instance["url"], instance["index"]) == (
+        "Home cluster",
+        "https://other.es.io",
+        "sensors",
+    )
+    assert instance["api_key_set"] is True
+    assert api.put(
+        "/api/observation-sources/elasticsearch/instances/nope", json={"name": "x"}
+    ).status_code == 404
 
 
 def test_elasticsearch_overlong_values_are_truncated_not_rejected(api):
     overlong_index = "weather-" + "a" * (MAX_SETTING_LENGTH + 50)
-    overlong_field = "outdoor_" + "b" * (MAX_ENTITY_LENGTH + 50)
+    overlong_field = "loc_" + "b" * (MAX_ENTITY_LENGTH + 50)
+    response = _add_es_instance(api, index=overlong_index, location_field=overlong_field)
+    (instance,) = response.json()["elasticsearch"]["instances"]
+    assert instance["index"] == overlong_index[:MAX_SETTING_LENGTH]
+    assert instance["location_field"] == overlong_field[:MAX_ENTITY_LENGTH]
+
+
+def test_elasticsearch_fields_are_coupled_with_instances_and_locations(api):
+    _add_es_instance(api)
+    _add_es_instance(api, name="Mallorca")
+    url = "/api/observation-sources/elasticsearch/measurements"
+    for instance_id, field, scope in (
+        ("elastic_cloud", "outdoor_temp", "outdoor"),
+        ("elastic_cloud", "indoor_temp", "indoor"),
+        ("mallorca", "sensors.terrace.temp", "outdoor"),
+    ):
+        response = api.post(
+            url,
+            json={
+                "instance_id": instance_id,
+                "location_id": "vienna",
+                "field": field,
+                "scope": scope,
+            },
+        )
+        assert response.status_code == 201, response.text
+
+    elasticsearch = response.json()["elasticsearch"]
+    # field mappings added in the UI enable the source without HAW_OBSERVATION_SOURCES
+    assert elasticsearch["enabled"] is True
+    counts = {item["id"]: item["measurement_count"] for item in elasticsearch["instances"]}
+    assert counts == {"elastic_cloud": 2, "mallorca": 1}
+    fields = {item["field"]: item for item in elasticsearch["measurements"]}
+    outdoor = fields["outdoor_temp"]
+    assert (outdoor["instance_id"], outdoor["location_id"], outdoor["origin"]) == (
+        "elastic_cloud",
+        "vienna",
+        "ui",
+    )
 
     response = api.put(
-        "/api/observation-sources/elasticsearch",
+        f"{url}/{outdoor['id']}",
         json={
-            "url": "https://my-deployment.es.io",
-            "api_key": "secret-key",
-            "index": overlong_index,
+            "instance_id": "mallorca",
             "location_id": "vienna",
-            "outdoor_field": overlong_field,
+            "field": "outdoor_temp",
+            "scope": "outdoor",
+            "name": "Garden",
         },
     )
     assert response.status_code == 200
-    elasticsearch = response.json()["elasticsearch"]
-    assert len(elasticsearch["index"]) == MAX_SETTING_LENGTH
-    assert elasticsearch["index"] == overlong_index[:MAX_SETTING_LENGTH]
-    assert len(elasticsearch["outdoor_fields"]["vienna"]) == MAX_ENTITY_LENGTH
-    assert elasticsearch["outdoor_fields"]["vienna"] == overlong_field[:MAX_ENTITY_LENGTH]
+    updated = {
+        item["id"]: item for item in response.json()["elasticsearch"]["measurements"]
+    }[outdoor["id"]]
+    assert (updated["instance_id"], updated["name"]) == ("mallorca", "Garden")
+
+    # deleting an instance removes its field mappings
+    response = api.delete("/api/observation-sources/elasticsearch/instances/mallorca")
+    assert response.status_code == 200
+    assert [item["field"] for item in response.json()["elasticsearch"]["measurements"]] == [
+        "indoor_temp"
+    ]
+    (remaining,) = response.json()["elasticsearch"]["measurements"]
+    assert api.delete(f"{url}/{remaining['id']}").status_code == 200
+    assert api.delete(f"{url}/{remaining['id']}").status_code == 404
 
 
-def test_elasticsearch_settings_can_be_removed(api):
-    api.put(
-        "/api/observation-sources/elasticsearch",
-        json={
+def test_elasticsearch_field_validation(api):
+    _add_es_instance(api)
+    base = {"instance_id": "elastic_cloud", "location_id": "vienna", "field": "outdoor_temp"}
+    url = "/api/observation-sources/elasticsearch/measurements"
+    assert api.post(url, json={**base, "location_id": "mars"}).status_code == 404
+    response = api.post(url, json={**base, "instance_id": "nope"})
+    assert response.status_code == 404
+    assert "Elasticsearch instance" in response.text
+    assert api.post(url, json={**base, "field": "not a field"}).status_code == 422
+    assert api.post(url, json={**base, "scope": "attic"}).status_code == 422
+    assert api.post(url, json=base).status_code == 201
+    assert api.post(url, json=base).status_code == 409  # duplicate
+    for index in range(MAX_ENTITIES_PER_LOCATION - 1):
+        assert api.post(url, json={**base, "field": f"t{index}"}).status_code == 201
+    assert api.post(url, json={**base, "field": "one_too_many"}).status_code == 409
+
+
+def test_environment_elasticsearch_is_a_read_only_instance(tmp_path, client_factory):
+    settings = Settings(
+        database_path=str(tmp_path / "es-env.sqlite3"),
+        elasticsearch_url="https://env.es.io",
+        elasticsearch_api_key="env-key",
+        elasticsearch_index="weather",
+        elasticsearch_outdoor_fields={"vienna": "outdoor_temp"},
+    )
+    storage = Storage(settings.database_path)
+    service = WeatherService(settings, storage, client_factory=client_factory)
+    with TestClient(create_app(settings, service)) as client:
+        elasticsearch = client.get("/api/observation-sources").json()["elasticsearch"]
+        (instance,) = elasticsearch["instances"]
+        assert (instance["id"], instance["origin"], instance["configured"]) == (
+            "environment",
+            "environment",
+            True,
+        )
+        (measurement,) = elasticsearch["measurements"]
+        assert (measurement["field"], measurement["origin"]) == ("outdoor_temp", "environment")
+        assert "env-key" not in client.get("/api/observation-sources").text
+
+        url = "/api/observation-sources/elasticsearch/instances/environment"
+        assert client.delete(url).status_code == 409
+        assert client.put(url, json={"name": "x"}).status_code == 409
+        response = client.post(
+            "/api/observation-sources/elasticsearch/measurements",
+            json={"instance_id": "environment", "location_id": "vienna", "field": "indoor_temp", "scope": "indoor"},
+        )
+        assert response.status_code == 201
+        assert response.json()["elasticsearch"]["instances"][0]["measurement_count"] == 2
+    storage.close()
+
+
+def test_legacy_elasticsearch_ui_settings_are_migrated(tmp_path, client_factory):
+    settings = Settings(database_path=str(tmp_path / "legacy-es.sqlite3"), locations=[VIENNA])
+    storage = Storage(settings.database_path)
+    storage.set_observation_source_settings(
+        "elasticsearch",
+        {
             "url": "https://my-deployment.es.io",
             "api_key": "secret-key",
             "index": "weather",
-            "location_id": "vienna",
-            "indoor_field": "indoor_temp",
+            "location_field": "loc",
+            "indoor_fields": {"vienna": "indoor_temp"},
+            "outdoor_fields": {"vienna": "outdoor_temp"},
         },
     )
-    removed = api.delete("/api/observation-sources/elasticsearch").json()["elasticsearch"]
-    assert removed == {
-        "configured": False,
-        "available": False,
-        "origin": None,
-        "url": None,
-        "index": None,
-        "location_field": "location_id",
-        "indoor_fields": {},
-        "outdoor_fields": {},
-    }
-
-
-def test_elasticsearch_settings_reject_unknown_location(api):
-    response = api.put(
-        "/api/observation-sources/elasticsearch",
-        json={"location_id": "mars", "indoor_field": "x"},
+    service = WeatherService(settings, storage, client_factory=client_factory)
+    assert storage.observation_source_settings("elasticsearch") is None
+    (instance,) = storage.es_instances()
+    assert (instance.url, instance.api_key, instance.index, instance.location_field) == (
+        "https://my-deployment.es.io",
+        "secret-key",
+        "weather",
+        "loc",
     )
-    assert response.status_code == 404
+    assert {(item.field, item.scope, item.instance_id) for item in storage.es_measurements()} == {
+        ("indoor_temp", "indoor", instance.id),
+        ("outdoor_temp", "outdoor", instance.id),
+    }
+    status = service.observation_sources_status().elasticsearch
+    assert status.configured is True
+    assert status.enabled is True
+    storage.close()
 
 
 def test_environment_home_assistant_is_a_read_only_instance(tmp_path, client_factory):

@@ -9,6 +9,7 @@ from app.config import Location, Settings
 from app.models import Observation
 from app.observations import fetch_observations
 from app.obs_sources import build_sources, registered_sources
+from app.obs_sources.elasticsearch import AUTH_SCHEME as ES_AUTH_SCHEME
 from app.obs_sources.elasticsearch import observations_from_aggregation
 from app.obs_sources.home_assistant import AUTH_SCHEME, observations_from_history
 
@@ -192,6 +193,85 @@ def test_elasticsearch_aggregation_is_parsed_into_observations():
     assert observations[0].temperature_min == 5.0
     assert observations[0].temperature_max == 12.0
     assert observations[0].scope == "outdoor"
+
+
+def test_elasticsearch_instances_need_url_key_and_index():
+    settings = Settings(
+        database_path=":memory:",
+        observation_sources=["elasticsearch"],
+        elasticsearch_instances=[{"id": "partial", "name": "Partial", "url": "https://p.es.io"}],
+        elasticsearch_measurements=[
+            {"instance_id": "partial", "location_id": "vienna", "field": "t"}
+        ],
+    )
+    assert build_sources(settings) == []
+
+
+async def test_elasticsearch_reads_every_instance_and_survives_a_failing_one(today):
+    settings = Settings(
+        database_path=":memory:",
+        observation_sources=["elasticsearch"],
+        elasticsearch_url="https://env.es.io",
+        elasticsearch_api_key="k0",
+        elasticsearch_index="env",
+        elasticsearch_indoor_fields={"vienna": "indoor_temp"},
+        elasticsearch_instances=[
+            {"id": "cloud", "name": "Cloud", "url": "https://cloud.es.io", "api_key": "k1",
+             "index": "weather", "location_field": "site"},
+            {"id": "broken", "name": "Broken", "url": "https://broken.es.io", "api_key": "k2",
+             "index": "weather"},
+        ],
+        elasticsearch_measurements=[
+            {"instance_id": "cloud", "location_id": "vienna", "field": "outdoor_temp"},
+            {"instance_id": "environment", "location_id": "vienna", "field": "garden"},
+            {"instance_id": "broken", "location_id": "vienna", "field": "x"},
+            {"instance_id": "cloud", "location_id": "porto_cristo", "field": "y"},
+        ],
+    )
+    yesterday = today - timedelta(days=1)
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        body = json.loads(request.content)
+        field = body["aggs"]["per_day"]["aggs"]["min_temperature"]["min"]["field"]
+        term = body["query"]["bool"]["filter"][0]["term"]
+        seen.append((request.url.host, request.url.path, request.headers["Authorization"], field, term))
+        if request.url.host == "broken.es.io":
+            return httpx.Response(500)
+        low, high = {"outdoor_temp": (5.0, 15.0), "garden": (3.0, 12.0), "indoor_temp": (20.0, 22.0)}[field]
+        return httpx.Response(
+            200,
+            json={
+                "aggregations": {
+                    "per_day": {
+                        "buckets": [
+                            {
+                                "key_as_string": f"{yesterday.isoformat()}T00:00:00.000+01:00",
+                                "min_temperature": {"value": low},
+                                "max_temperature": {"value": high},
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        observations = await fetch_observations(client, settings, VIENNA)
+
+    assert sorted(seen) == [
+        ("broken.es.io", "/weather/_search", f"{ES_AUTH_SCHEME} k2", "x", {"location_id": "vienna"}),
+        ("cloud.es.io", "/weather/_search", f"{ES_AUTH_SCHEME} k1", "outdoor_temp", {"site": "vienna"}),
+        ("env.es.io", "/env/_search", f"{ES_AUTH_SCHEME} k0", "garden", {"location_id": "vienna"}),
+        ("env.es.io", "/env/_search", f"{ES_AUTH_SCHEME} k0", "indoor_temp", {"location_id": "vienna"}),
+    ]
+    by_scope = {item.scope: item for item in observations if item.target_date == yesterday}
+    # several outdoor fields of one day are merged: lowest min, highest max
+    assert (by_scope["outdoor"].temperature_min, by_scope["outdoor"].temperature_max) == (3.0, 15.0)
+    assert (by_scope["indoor"].temperature_min, by_scope["indoor"].temperature_max) == (20.0, 22.0)
+    assert len(observations) == 2
 
 
 async def test_fetch_observations_merges_enabled_sources(today):

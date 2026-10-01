@@ -42,6 +42,42 @@ def test_failed_forecasts_are_not_stored(storage):
     assert storage.save_forecast(empty) == 0
 
 
+def test_observations_merge_without_overwriting_with_null(storage):
+    """Two sources writing the same (location, date, scope) must not let one
+    source's missing field (e.g. Home Assistant has no precipitation) wipe
+    out a value already saved by another source (e.g. Open-Meteo)."""
+    yesterday = today_utc() - timedelta(days=1)
+    storage.save_observations(
+        [
+            Observation(
+                location_id="vienna",
+                target_date=yesterday,
+                temperature_min=9.0,
+                temperature_max=18.0,
+                precipitation_mm=2.5,
+                scope="outdoor",
+                source="open_meteo",
+            )
+        ]
+    )
+    storage.save_observations(
+        [
+            Observation(
+                location_id="vienna",
+                target_date=yesterday,
+                temperature_min=10.0,
+                temperature_max=19.0,
+                scope="outdoor",
+                source="home_assistant",
+            )
+        ]
+    )
+    merged = storage.observations("vienna")[yesterday]
+    assert merged.precipitation_mm == 2.5
+    assert merged.temperature_min == 10.0
+    assert merged.temperature_max == 19.0
+
+
 def test_observations_round_trip(storage):
     yesterday = today_utc() - timedelta(days=1)
     storage.save_observations(

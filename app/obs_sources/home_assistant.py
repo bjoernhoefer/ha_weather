@@ -121,15 +121,16 @@ class HomeAssistantObservationSource(ObservationSource):
     async def _history(
         self,
         client: httpx.AsyncClient,
+        settings: Settings,
         entity_ids: List[str],
         start: datetime,
         end: datetime,
     ) -> List[List[dict]]:
-        base_url = (self.settings.home_assistant_url or "").rstrip("/")
+        base_url = (settings.home_assistant_url or "").rstrip("/")
         # the timestamp is part of the URL path, so it must be percent-encoded
         # (its ``+00:00`` UTC offset would otherwise be decoded as a space)
         url = f"{base_url}/api/history/period/{quote(start.isoformat())}"
-        auth_header = " ".join([AUTH_SCHEME, str(self.settings.home_assistant_token)])
+        auth_header = " ".join([AUTH_SCHEME, str(settings.home_assistant_token)])
         response = await client.get(
             url,
             params={
@@ -165,7 +166,7 @@ class HomeAssistantObservationSource(ObservationSource):
             entity_ids = _entities_for(mapping, location.id)
             if not entity_ids:
                 continue
-            history = await self._history(client, entity_ids, start, end)
+            history = await self._history(client, settings, entity_ids, start, end)
             observations.extend(
                 observations_from_history(
                     history,

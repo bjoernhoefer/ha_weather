@@ -185,6 +185,11 @@ class Storage:
     # observations
     # ------------------------------------------------------------------
     def save_observations(self, observations: List[Observation]) -> int:
+        """Upsert observations, merging per-field so one source filling in a
+        value (e.g. Open-Meteo's precipitation) is not wiped out by another
+        source writing the same ``(location_id, target_date, scope)`` row
+        without that field (e.g. Home Assistant/Elasticsearch temperatures).
+        """
         rows = [
             (
                 observation.location_id,
@@ -206,10 +211,11 @@ class Storage:
                     temperature_min, temperature_max, precipitation_mm, source)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (location_id, target_date, scope)
-                DO UPDATE SET temperature_min=excluded.temperature_min,
-                    temperature_max=excluded.temperature_max,
-                    precipitation_mm=excluded.precipitation_mm,
-                    source=excluded.source
+                DO UPDATE SET
+                    temperature_min=COALESCE(excluded.temperature_min, observations.temperature_min),
+                    temperature_max=COALESCE(excluded.temperature_max, observations.temperature_max),
+                    precipitation_mm=COALESCE(excluded.precipitation_mm, observations.precipitation_mm),
+                    source=COALESCE(excluded.source, observations.source)
                 """,
                 rows,
             )

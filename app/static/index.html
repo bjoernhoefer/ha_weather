@@ -158,9 +158,9 @@
       <summary><h2>Real world measurements</h2></summary>
       <p class="muted">
         Measured values verify the providers and the history. Add every Home
-        Assistant instance once, then couple its sensors with an instance and a
-        location in the measurement list. Only outdoor measurements are used to
-        score the providers. Tokens and API keys are stored on the server and
+        Assistant or Elasticsearch instance once, then couple its sensors or
+        fields with an instance and a location in the lists below. Only
+        outdoor measurements are used to score the providers. Tokens and API keys are stored on the server and
         never shown again.
       </p>
 
@@ -202,21 +202,49 @@
         <button type="button" id="measurementCancel" hidden>Cancel</button>
       </form>
 
-      <h3>Elasticsearch</h3>
-      <p class="muted">
-        Access details are shared across all locations; field mappings apply
-        to the location selected at the top of the page.
-      </p>
+      <h3>Elasticsearch instances</h3>
       <p id="elasticsearchState" class="muted"></p>
-      <form id="elasticsearchForm" class="bar">
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Id</th><th>URL</th><th>Index</th><th>Location field</th><th>API key</th><th>Origin</th><th>Fields</th><th></th></tr>
+        </thead>
+        <tbody id="esInstances"></tbody>
+      </table>
+      <form id="esInstanceForm" class="bar">
+        <label>Name <input id="esName" required maxlength="100" placeholder="e.g. Elastic Cloud" /></label>
         <label>URL <input id="esUrl" type="url" maxlength="500" placeholder="https://my-deployment.es.io" /></label>
-        <label>API key <input id="esApiKey" type="password" autocomplete="off" maxlength="500" placeholder="new API key" /></label>
+        <label>API key <input id="esApiKey" type="password" autocomplete="off" maxlength="500" placeholder="API key" /></label>
         <label>Index <input id="esIndex" maxlength="500" placeholder="weather" /></label>
         <label>Location field <input id="esLocationField" maxlength="200" placeholder="location_id" /></label>
-        <label>Indoor field <input id="esIndoorField" maxlength="200" placeholder="indoor_temperature" /></label>
-        <label>Outdoor field <input id="esOutdoorField" maxlength="200" placeholder="outdoor_temperature" /></label>
-        <button type="submit">Save</button>
-        <button type="button" id="elasticsearchRemove">Remove</button>
+        <button type="submit" id="esInstanceSubmit">Add instance</button>
+        <button type="button" id="esInstanceCancel" hidden>Cancel</button>
+      </form>
+
+      <h3>Elasticsearch fields</h3>
+      <p class="muted">
+        Each entry reads the daily minimum/maximum of a numeric temperature
+        field. Documents are selected by the instance's location field, which
+        must contain the location id.
+      </p>
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Field</th><th>Location</th><th>Instance</th><th>Scope</th><th>Origin</th><th></th></tr>
+        </thead>
+        <tbody id="esMeasurements"></tbody>
+      </table>
+      <form id="esMeasurementForm" class="bar">
+        <label>Instance <select id="esMeasurementInstance" required></select></label>
+        <label>Location <select id="esMeasurementLocation" required></select></label>
+        <label>Field <input id="esMeasurementField" required maxlength="200" pattern="[A-Za-z0-9_@.\-]+" placeholder="outdoor_temperature" /></label>
+        <label>Scope
+          <select id="esMeasurementScope">
+            <option value="outdoor">outdoor</option>
+            <option value="indoor">indoor</option>
+          </select>
+        </label>
+        <label>Name <input id="esMeasurementName" maxlength="100" placeholder="optional" /></label>
+        <button type="submit" id="esMeasurementSubmit">Add field</button>
+        <button type="button" id="esMeasurementCancel" hidden>Cancel</button>
       </form>
     </details>
 
@@ -531,6 +559,8 @@
       let observationSources = null;
       let editingInstance = null;
       let editingMeasurement = null;
+      let editingEsInstance = null;
+      let editingEsMeasurement = null;
 
       function locationName(locationId) {
         const location = locations.find((item) => item.id === locationId);
@@ -649,24 +679,113 @@
         }
       }
 
-      function renderElasticsearch(es) {
-        const locationId = $("location").value;
+      function renderEsInstances(es) {
+        const body = $("esInstances");
+        body.textContent = "";
+        es.instances.forEach((instance) => {
+          const row = document.createElement("tr");
+          cell(row, instance.name);
+          cell(row, instance.id);
+          cell(row, instance.url);
+          cell(row, instance.index);
+          cell(row, instance.location_field);
+          cell(row, instance.api_key_set ? "set" : "missing");
+          cell(row, OBS_ORIGINS[instance.origin]);
+          cell(row, instance.measurement_count);
+          const actions = document.createElement("td");
+          if (instance.origin === "ui") {
+            const box = document.createElement("div");
+            box.className = "bar";
+            box.append(
+              button("Edit", () => startEsInstanceEdit(instance)),
+              button("Delete", async () => {
+                const extra = instance.measurement_count
+                  ? ` and its ${instance.measurement_count} field(s)`
+                  : "";
+                if (!confirm(`Delete the Elasticsearch instance ${instance.name}${extra}?`)) return;
+                try {
+                  renderObservationSources(await api(
+                    `/api/observation-sources/elasticsearch/instances/${encodeURIComponent(instance.id)}`,
+                    { method: "DELETE" }
+                  ));
+                  if (editingEsInstance === instance.id) resetEsInstanceForm();
+                  setStatus(`Deleted Elasticsearch instance ${instance.name}.`);
+                } catch (error) { setStatus(error.message); }
+              })
+            );
+            actions.appendChild(box);
+          } else {
+            actions.textContent = "read only";
+          }
+          row.appendChild(actions);
+          body.appendChild(row);
+        });
+        if (!es.instances.length) {
+          const row = document.createElement("tr");
+          const td = cell(row, "No Elasticsearch instance yet – add one below.");
+          td.colSpan = 9;
+          body.appendChild(row);
+        }
         $("elasticsearchState").textContent =
-          `${es.configured ? "configured" : "not configured"}` +
-          (es.origin ? ` (${OBS_ORIGINS[es.origin]})` : "") +
-          `, ${es.available ? "available" : "unavailable"} for this location's sensors.`;
-        $("esUrl").value = es.url || "";
-        $("esIndex").value = es.index || "";
-        $("esLocationField").value = es.location_field || "";
-        $("esIndoorField").value = es.indoor_fields[locationId] || "";
-        $("esOutdoorField").value = es.outdoor_fields[locationId] || "";
+          `${es.instances.length} instance(s), ${es.measurements.length} field(s); ` +
+          (es.enabled ? "Elasticsearch measurements are used." : "Elasticsearch measurements are not used yet.");
+        fillSelect(
+          $("esMeasurementInstance"),
+          es.instances.map((instance) => [instance.id, instance.name])
+        );
+      }
+
+      function renderEsMeasurements(es) {
+        const body = $("esMeasurements");
+        body.textContent = "";
+        const instanceNames = Object.fromEntries(es.instances.map((item) => [item.id, item.name]));
+        es.measurements.forEach((measurement) => {
+          const row = document.createElement("tr");
+          cell(row, measurement.name || "–");
+          cell(row, measurement.field);
+          cell(row, locationName(measurement.location_id));
+          cell(row, instanceNames[measurement.instance_id] || `${measurement.instance_id} (unknown)`);
+          cell(row, measurement.scope);
+          cell(row, OBS_ORIGINS[measurement.origin]);
+          const actions = document.createElement("td");
+          if (measurement.origin === "ui") {
+            const box = document.createElement("div");
+            box.className = "bar";
+            box.append(
+              button("Edit", () => startEsMeasurementEdit(measurement)),
+              button("Delete", async () => {
+                if (!confirm(`Delete the Elasticsearch field ${measurement.field}?`)) return;
+                try {
+                  renderObservationSources(await api(
+                    `/api/observation-sources/elasticsearch/measurements/${measurement.id}`,
+                    { method: "DELETE" }
+                  ));
+                  if (editingEsMeasurement === measurement.id) resetEsMeasurementForm();
+                  setStatus(`Deleted Elasticsearch field ${measurement.field}.`);
+                } catch (error) { setStatus(error.message); }
+              })
+            );
+            actions.appendChild(box);
+          } else {
+            actions.textContent = "read only";
+          }
+          row.appendChild(actions);
+          body.appendChild(row);
+        });
+        if (!es.measurements.length) {
+          const row = document.createElement("tr");
+          const td = cell(row, "No Elasticsearch field yet – add one below.");
+          td.colSpan = 7;
+          body.appendChild(row);
+        }
       }
 
       function renderObservationSources(sources) {
         observationSources = sources;
         renderInstances(sources.home_assistant);
         renderMeasurements(sources.home_assistant);
-        renderElasticsearch(sources.elasticsearch);
+        renderEsInstances(sources.elasticsearch);
+        renderEsMeasurements(sources.elasticsearch);
       }
 
       async function loadObservationSources() {
@@ -761,6 +880,96 @@
         } catch (error) { setStatus(error.message); }
       });
 
+      function resetEsInstanceForm() {
+        editingEsInstance = null;
+        $("esInstanceForm").reset();
+        $("esApiKey").placeholder = "API key";
+        $("esInstanceSubmit").textContent = "Add instance";
+        $("esInstanceCancel").hidden = true;
+      }
+
+      function startEsInstanceEdit(instance) {
+        editingEsInstance = instance.id;
+        $("esName").value = instance.name;
+        $("esUrl").value = instance.url || "";
+        $("esApiKey").value = "";
+        $("esApiKey").placeholder = instance.api_key_set ? "keep current API key" : "API key";
+        $("esIndex").value = instance.index || "";
+        $("esLocationField").value = instance.location_field || "";
+        $("esInstanceSubmit").textContent = "Save instance";
+        $("esInstanceCancel").hidden = false;
+        $("esName").focus();
+      }
+
+      $("esInstanceCancel").addEventListener("click", resetEsInstanceForm);
+      $("esInstanceForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const payload = {
+          name: $("esName").value.trim(),
+          url: $("esUrl").value.trim() || null,
+          api_key: $("esApiKey").value.trim() || null,
+          index: $("esIndex").value.trim() || null,
+          location_field: $("esLocationField").value.trim() || null,
+        };
+        try {
+          const path = editingEsInstance
+            ? `/api/observation-sources/elasticsearch/instances/${encodeURIComponent(editingEsInstance)}`
+            : "/api/observation-sources/elasticsearch/instances";
+          renderObservationSources(await api(path, {
+            method: editingEsInstance ? "PUT" : "POST",
+            body: JSON.stringify(payload),
+          }));
+          setStatus(`Elasticsearch instance ${payload.name} ${editingEsInstance ? "saved" : "added"}.`);
+          resetEsInstanceForm();
+        } catch (error) { setStatus(error.message); }
+      });
+
+      function resetEsMeasurementForm() {
+        editingEsMeasurement = null;
+        const instance = $("esMeasurementInstance").value;
+        $("esMeasurementForm").reset();
+        if (instance) $("esMeasurementInstance").value = instance;
+        $("esMeasurementLocation").value = $("location").value;
+        $("esMeasurementSubmit").textContent = "Add field";
+        $("esMeasurementCancel").hidden = true;
+      }
+
+      function startEsMeasurementEdit(measurement) {
+        editingEsMeasurement = measurement.id;
+        $("esMeasurementInstance").value = measurement.instance_id;
+        $("esMeasurementLocation").value = measurement.location_id;
+        $("esMeasurementField").value = measurement.field;
+        $("esMeasurementScope").value = measurement.scope;
+        $("esMeasurementName").value = measurement.name || "";
+        $("esMeasurementSubmit").textContent = "Save field";
+        $("esMeasurementCancel").hidden = false;
+        $("esMeasurementField").focus();
+      }
+
+      $("esMeasurementCancel").addEventListener("click", resetEsMeasurementForm);
+      $("esMeasurementForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const payload = {
+          instance_id: $("esMeasurementInstance").value,
+          location_id: $("esMeasurementLocation").value,
+          field: $("esMeasurementField").value.trim(),
+          scope: $("esMeasurementScope").value,
+          name: $("esMeasurementName").value.trim(),
+        };
+        if (!payload.instance_id) { setStatus("Please add an Elasticsearch instance first."); return; }
+        try {
+          const path = editingEsMeasurement
+            ? `/api/observation-sources/elasticsearch/measurements/${editingEsMeasurement}`
+            : "/api/observation-sources/elasticsearch/measurements";
+          renderObservationSources(await api(path, {
+            method: editingEsMeasurement ? "PUT" : "POST",
+            body: JSON.stringify(payload),
+          }));
+          setStatus(`Elasticsearch field ${payload.field} ${editingEsMeasurement ? "saved" : "added"}.`);
+          resetEsMeasurementForm();
+        } catch (error) { setStatus(error.message); }
+      });
+
       function renderLocations() {
         const body = $("locations");
         body.textContent = "";
@@ -799,6 +1008,7 @@
         const options = items.map((location) => [location.id, location.name]);
         fillSelect(select, options);
         fillSelect($("measurementLocation"), options);
+        fillSelect($("esMeasurementLocation"), options);
         if (preferred && items.some((item) => item.id === preferred)) select.value = preferred;
         renderLocations();
         if (select.value !== previous) await locationChanged();
@@ -882,41 +1092,9 @@
       async function locationChanged() {
         if (observationSources) renderObservationSources(observationSources);
         if (!editingMeasurement) $("measurementLocation").value = $("location").value;
+        if (!editingEsMeasurement) $("esMeasurementLocation").value = $("location").value;
         await load(false);
       }
-
-      $("elasticsearchForm").addEventListener("submit", async (event) => {
-        event.preventDefault();
-        try {
-          const payload = {
-            url: $("esUrl").value.trim() || null,
-            api_key: $("esApiKey").value.trim() || null,
-            index: $("esIndex").value.trim() || null,
-            location_field: $("esLocationField").value.trim() || null,
-            location_id: $("location").value,
-            indoor_field: $("esIndoorField").value.trim() || null,
-            outdoor_field: $("esOutdoorField").value.trim() || null,
-          };
-          renderObservationSources(
-            await api("/api/observation-sources/elasticsearch", {
-              method: "PUT",
-              body: JSON.stringify(payload),
-            })
-          );
-          $("esApiKey").value = "";
-          setStatus("Elasticsearch settings saved.");
-        } catch (error) { setStatus(error.message); }
-      });
-
-      $("elasticsearchRemove").addEventListener("click", async () => {
-        if (!confirm("Remove the Elasticsearch settings entered in the web UI?")) return;
-        try {
-          renderObservationSources(
-            await api("/api/observation-sources/elasticsearch", { method: "DELETE" })
-          );
-          setStatus("Elasticsearch settings removed.");
-        } catch (error) { setStatus(error.message); }
-      });
 
       $("addSource").addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -954,13 +1132,17 @@
       async function init() {
         resetInstanceForm();
         resetMeasurementForm();
+        resetEsInstanceForm();
+        resetEsMeasurementForm();
         try {
           const items = await api("/api/locations");
           locations = items;
           const options = items.map((location) => [location.id, location.name]);
           fillSelect($("location"), options);
           fillSelect($("measurementLocation"), options);
+          fillSelect($("esMeasurementLocation"), options);
           $("measurementLocation").value = $("location").value;
+          $("esMeasurementLocation").value = $("location").value;
           renderLocations();
           await loadSources();
           await loadObservationSources();

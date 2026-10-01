@@ -133,8 +133,8 @@ Providers whose (free) API key is missing are simply skipped.
 ### Ground truth observations
 
 Archived forecasts are compared against measured values to compute the
-Top/Low list and the consensus weights (see [Accuracy
-verification](#features)). By default this ground truth comes from
+Top/Low list and the consensus weights (see
+[Features](#features)). By default this ground truth comes from
 Open-Meteo's `past_days` endpoint (`open_meteo`, public, no registration).
 Two additional, pluggable sources can be enabled through
 `HAW_OBSERVATION_SOURCES` (comma separated, e.g.

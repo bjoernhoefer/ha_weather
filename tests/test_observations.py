@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 import httpx
-import pytest
 
 from app.clock import today_utc
 from app.config import Location, Settings

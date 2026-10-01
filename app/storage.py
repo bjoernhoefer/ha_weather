@@ -200,14 +200,7 @@ class Storage:
         so later sources take precedence over earlier ones for conflicting
         fields. ``source`` is combined (e.g. ``"home_assistant+open_meteo"``)
         so it keeps reflecting every source that actually contributed a
-        field, instead of only the last writer. Existing ``source`` values
-        are looked up per location with a bounded ``target_date`` range
-        (rather than binding one parameter set per row) to avoid hitting
-        SQLite's bound-parameter limit on large batches, and the in-memory
-        map is updated as each row is merged so multiple rows for the same
-        key within one batch (e.g. Open-Meteo and Home Assistant outdoor rows
-        for the same day) are merged with each other too, not just with
-        what was already stored.
+        field, instead of only the last writer.
         """
         if not observations:
             return 0
@@ -218,6 +211,10 @@ class Storage:
                 dates_by_location.setdefault(observation.location_id, []).append(
                     observation.target_date
                 )
+            # Existing `source` values are looked up per location with a
+            # bounded `target_date` range (rather than binding one parameter
+            # set per row) to avoid hitting SQLite's bound-parameter limit on
+            # large batches.
             for location_id, dates in dates_by_location.items():
                 rows = self._connection.execute(
                     """
@@ -237,6 +234,10 @@ class Storage:
                     observation.scope,
                 )
                 merged_source = _merge_sources(existing_sources.get(key), observation.source)
+                # Update the in-memory map as each row is merged so multiple
+                # rows for the same key within one batch (e.g. Open-Meteo and
+                # Home Assistant outdoor rows for the same day) are merged
+                # with each other too, not just with what was already stored.
                 existing_sources[key] = merged_source
                 upsert_rows.append(
                     (

@@ -84,6 +84,37 @@
     </section>
 
     <section>
+      <h2>Ground truth observations</h2>
+      <p class="muted">
+        Home Assistant and Elasticsearch access details are shared across all
+        locations; sensor/field mappings apply to the location selected above.
+        Tokens and API keys are stored on the server and never shown again.
+      </p>
+      <h3>Home Assistant</h3>
+      <p id="homeAssistantState" class="muted"></p>
+      <form id="homeAssistantForm" class="bar">
+        <label>URL <input id="haUrl" type="url" maxlength="500" placeholder="http://homeassistant.local:8123" /></label>
+        <label>Long-lived token <input id="haToken" type="password" autocomplete="off" maxlength="500" placeholder="new token" /></label>
+        <label>Indoor entities <input id="haIndoorEntities" maxlength="2000" placeholder="sensor.living_room_temperature, ..." /></label>
+        <label>Outdoor entities <input id="haOutdoorEntities" maxlength="2000" placeholder="sensor.garden_temperature, ..." /></label>
+        <button type="submit">Save</button>
+        <button type="button" id="homeAssistantRemove">Remove</button>
+      </form>
+      <h3>Elasticsearch</h3>
+      <p id="elasticsearchState" class="muted"></p>
+      <form id="elasticsearchForm" class="bar">
+        <label>URL <input id="esUrl" type="url" maxlength="500" placeholder="https://my-deployment.es.io" /></label>
+        <label>API key <input id="esApiKey" type="password" autocomplete="off" maxlength="500" placeholder="new API key" /></label>
+        <label>Index <input id="esIndex" maxlength="500" placeholder="weather" /></label>
+        <label>Location field <input id="esLocationField" maxlength="200" placeholder="location_id" /></label>
+        <label>Indoor field <input id="esIndoorField" maxlength="200" placeholder="indoor_temperature" /></label>
+        <label>Outdoor field <input id="esOutdoorField" maxlength="200" placeholder="outdoor_temperature" /></label>
+        <button type="submit">Save</button>
+        <button type="button" id="elasticsearchRemove">Remove</button>
+      </form>
+    </section>
+
+    <section>
       <h2>Season &amp; weather change</h2>
       <table><tbody id="season"></tbody></table>
     </section>
@@ -355,6 +386,110 @@
         } catch (error) { setStatus(error.message); }
       }
 
+      const OBS_ORIGINS = { ui: "set in web UI", environment: "from environment" };
+
+      function parseEntityList(value) {
+        // The server truncates to its configured maximum and the UI is
+        // re-rendered from its response, so no limit is duplicated here.
+        return value
+          .split(",")
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0);
+      }
+
+      function renderObservationSources(sources) {
+        const locationId = $("location").value;
+        const ha = sources.home_assistant;
+        $("homeAssistantState").textContent =
+          `${ha.configured ? "configured" : "not configured"}` +
+          (ha.origin ? ` (${OBS_ORIGINS[ha.origin]})` : "") +
+          `, ${ha.available ? "available" : "unavailable"} for this location's sensors.`;
+        $("haUrl").value = ha.url || "";
+        $("haIndoorEntities").value = (ha.indoor_entities[locationId] || []).join(", ");
+        $("haOutdoorEntities").value = (ha.outdoor_entities[locationId] || []).join(", ");
+
+        const es = sources.elasticsearch;
+        $("elasticsearchState").textContent =
+          `${es.configured ? "configured" : "not configured"}` +
+          (es.origin ? ` (${OBS_ORIGINS[es.origin]})` : "") +
+          `, ${es.available ? "available" : "unavailable"} for this location's sensors.`;
+        $("esUrl").value = es.url || "";
+        $("esIndex").value = es.index || "";
+        $("esLocationField").value = es.location_field || "";
+        $("esIndoorField").value = es.indoor_fields[locationId] || "";
+        $("esOutdoorField").value = es.outdoor_fields[locationId] || "";
+      }
+
+      async function loadObservationSources() {
+        try {
+          renderObservationSources(await api("/api/observation-sources"));
+        } catch (error) { setStatus(error.message); }
+      }
+
+      $("homeAssistantForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        try {
+          const payload = {
+            url: $("haUrl").value.trim() || null,
+            token: $("haToken").value.trim() || null,
+            location_id: $("location").value,
+            indoor_entities: parseEntityList($("haIndoorEntities").value),
+            outdoor_entities: parseEntityList($("haOutdoorEntities").value),
+          };
+          renderObservationSources(
+            await api("/api/observation-sources/home-assistant", {
+              method: "PUT",
+              body: JSON.stringify(payload),
+            })
+          );
+          $("haToken").value = "";
+          setStatus("Home Assistant settings saved.");
+        } catch (error) { setStatus(error.message); }
+      });
+
+      $("homeAssistantRemove").addEventListener("click", async () => {
+        if (!confirm("Remove the Home Assistant settings entered in the web UI?")) return;
+        try {
+          renderObservationSources(
+            await api("/api/observation-sources/home-assistant", { method: "DELETE" })
+          );
+          setStatus("Home Assistant settings removed.");
+        } catch (error) { setStatus(error.message); }
+      });
+
+      $("elasticsearchForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        try {
+          const payload = {
+            url: $("esUrl").value.trim() || null,
+            api_key: $("esApiKey").value.trim() || null,
+            index: $("esIndex").value.trim() || null,
+            location_field: $("esLocationField").value.trim() || null,
+            location_id: $("location").value,
+            indoor_field: $("esIndoorField").value.trim() || null,
+            outdoor_field: $("esOutdoorField").value.trim() || null,
+          };
+          renderObservationSources(
+            await api("/api/observation-sources/elasticsearch", {
+              method: "PUT",
+              body: JSON.stringify(payload),
+            })
+          );
+          $("esApiKey").value = "";
+          setStatus("Elasticsearch settings saved.");
+        } catch (error) { setStatus(error.message); }
+      });
+
+      $("elasticsearchRemove").addEventListener("click", async () => {
+        if (!confirm("Remove the Elasticsearch settings entered in the web UI?")) return;
+        try {
+          renderObservationSources(
+            await api("/api/observation-sources/elasticsearch", { method: "DELETE" })
+          );
+          setStatus("Elasticsearch settings removed.");
+        } catch (error) { setStatus(error.message); }
+      });
+
       $("addSource").addEventListener("submit", async (event) => {
         event.preventDefault();
         try {
@@ -399,13 +534,17 @@
             select.appendChild(option);
           });
           await loadSources();
+          await loadObservationSources();
           await load();
         } catch (error) { setStatus(error.message); }
       }
 
       $("reload").addEventListener("click", () => load(false));
       $("refresh").addEventListener("click", () => load(true));
-      $("location").addEventListener("change", () => load(false));
+      $("location").addEventListener("change", () => {
+        load(false);
+        loadObservationSources();
+      });
       $("verify").addEventListener("click", async () => {
         try {
           setStatus("Asking Azure AI Foundry…");

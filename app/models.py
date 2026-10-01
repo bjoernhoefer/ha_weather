@@ -7,6 +7,8 @@ from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from .config import DEFAULT_ELASTICSEARCH_LOCATION_FIELD
+
 
 class DailyForecast(BaseModel):
     """One forecast day of a single provider."""
@@ -284,7 +286,7 @@ class ElasticsearchSettingsInfo(BaseModel):
     origin: Optional[str] = None
     url: Optional[str] = None
     index: Optional[str] = None
-    location_field: str = "location_id"
+    location_field: str = DEFAULT_ELASTICSEARCH_LOCATION_FIELD
     indoor_fields: Dict[str, str] = Field(default_factory=dict)
     outdoor_fields: Dict[str, str] = Field(default_factory=dict)
 

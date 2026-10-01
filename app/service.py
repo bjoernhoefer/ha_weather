@@ -13,7 +13,7 @@ from .agro import AgroDay, apply_agro, fetch_agro, watering_state
 from .aggregation import aggregate, aggregate_hourly
 from .azure_foundry import AzureFoundryVerifier
 from .clock import now_utc, today_utc
-from .config import Location, Settings
+from .config import DEFAULT_ELASTICSEARCH_LOCATION_FIELD, Location, Settings
 from .models import (
     CustomSource,
     ElasticsearchSettingsIn,
@@ -31,7 +31,7 @@ from .models import (
     VerificationResult,
 )
 from .observations import fetch_observations
-from .obs_sources import registered_sources
+from .obs_sources import ObservationSource, registered_sources
 from .providers import WeatherProvider, build_providers, registered_providers
 from .providers.open_meteo import OpenMeteoModelProvider
 from .scoring import build_ranking, compute_scores, provider_weights
@@ -115,39 +115,52 @@ class WeatherService:
         update: Dict[str, object] = {}
         ha_config = self.storage.observation_source_settings("home_assistant")
         if ha_config:
-            if ha_config.get("url"):
+            if "url" in ha_config:
                 update["home_assistant_url"] = ha_config["url"]
             if ha_config.get("token"):
                 update["home_assistant_token"] = ha_config["token"]
-            if ha_config.get("indoor_entities"):
+            if "indoor_entities" in ha_config:
                 update["home_assistant_indoor_entities"] = ha_config["indoor_entities"]
-            if ha_config.get("outdoor_entities"):
+            if "outdoor_entities" in ha_config:
                 update["home_assistant_outdoor_entities"] = ha_config["outdoor_entities"]
         es_config = self.storage.observation_source_settings("elasticsearch")
         if es_config:
-            if es_config.get("url"):
+            if "url" in es_config:
                 update["elasticsearch_url"] = es_config["url"]
             if es_config.get("api_key"):
                 update["elasticsearch_api_key"] = es_config["api_key"]
-            if es_config.get("index"):
+            if "index" in es_config:
                 update["elasticsearch_index"] = es_config["index"]
-            if es_config.get("location_field"):
+            if "location_field" in es_config:
                 update["elasticsearch_location_field"] = es_config["location_field"]
-            if es_config.get("indoor_fields"):
+            if "indoor_fields" in es_config:
                 update["elasticsearch_indoor_fields"] = es_config["indoor_fields"]
-            if es_config.get("outdoor_fields"):
+            if "outdoor_fields" in es_config:
                 update["elasticsearch_outdoor_fields"] = es_config["outdoor_fields"]
         return self.settings.model_copy(update=update) if update else self.settings
+
+    @staticmethod
+    def _built_in_observation_source(name: str, settings: Settings) -> ObservationSource:
+        """Instantiate a built-in observation source by name.
+
+        Unlike :func:`build_sources`, this does not filter by availability
+        and raises a clear error instead of ``KeyError`` if the source was
+        ever renamed or removed from the registry.
+        """
+        source_cls = registered_sources().get(name)
+        if source_cls is None:
+            raise RuntimeError(f"built-in observation source '{name}' is not registered")
+        return source_cls(settings)
 
     def observation_sources_status(self) -> ObservationSourcesInfo:
         """Current Home Assistant/Elasticsearch configuration for the UI."""
         settings = self.observation_settings()
         ha_config = self.storage.observation_source_settings("home_assistant") or {}
-        ha_source = registered_sources()["home_assistant"](settings)
+        ha_source = self._built_in_observation_source("home_assistant", settings)
         ha_origin = None
-        if ha_config.get("token"):
+        if ha_config:
             ha_origin = "ui"
-        elif self.settings.home_assistant_token:
+        elif self.settings.home_assistant_url or self.settings.home_assistant_token:
             ha_origin = "environment"
         home_assistant = HomeAssistantSettingsInfo(
             configured=bool(settings.home_assistant_url and settings.home_assistant_token),
@@ -159,11 +172,15 @@ class WeatherService:
         )
 
         es_config = self.storage.observation_source_settings("elasticsearch") or {}
-        es_source = registered_sources()["elasticsearch"](settings)
+        es_source = self._built_in_observation_source("elasticsearch", settings)
         es_origin = None
-        if es_config.get("api_key"):
+        if es_config:
             es_origin = "ui"
-        elif self.settings.elasticsearch_api_key:
+        elif (
+            self.settings.elasticsearch_url
+            or self.settings.elasticsearch_api_key
+            or self.settings.elasticsearch_index
+        ):
             es_origin = "environment"
         elasticsearch = ElasticsearchSettingsInfo(
             configured=bool(
@@ -186,8 +203,9 @@ class WeatherService:
     ) -> ObservationSourcesInfo:
         self.location(settings_in.location_id)  # raises UnknownLocationError
         config = self.storage.observation_source_settings("home_assistant") or {}
-        if settings_in.url is not None:
-            config["url"] = settings_in.url
+        # The UI always resubmits the full URL field (unlike the write-only
+        # token), so an empty value means "clear the stored URL".
+        config["url"] = settings_in.url
         if settings_in.token:
             config["token"] = settings_in.token
         indoor_entities = dict(config.get("indoor_entities") or {})
@@ -202,7 +220,13 @@ class WeatherService:
             outdoor_entities.pop(settings_in.location_id, None)
         config["indoor_entities"] = indoor_entities
         config["outdoor_entities"] = outdoor_entities
-        self.storage.set_observation_source_settings("home_assistant", config)
+        if not (config.get("url") or config.get("token") or indoor_entities or outdoor_entities):
+            # Nothing meaningful left to store (e.g. an empty form was
+            # submitted) - remove the row so the environment configuration,
+            # if any, takes effect again instead of a stale "ui" origin.
+            self.storage.delete_observation_source_settings("home_assistant")
+        else:
+            self.storage.set_observation_source_settings("home_assistant", config)
         return self.observation_sources_status()
 
     def delete_home_assistant_settings(self) -> ObservationSourcesInfo:
@@ -214,14 +238,14 @@ class WeatherService:
     ) -> ObservationSourcesInfo:
         self.location(settings_in.location_id)  # raises UnknownLocationError
         config = self.storage.observation_source_settings("elasticsearch") or {}
-        if settings_in.url is not None:
-            config["url"] = settings_in.url
+        # The UI always resubmits the full URL/index fields (unlike the
+        # write-only API key), so an empty value clears the stored one.
+        config["url"] = settings_in.url
         if settings_in.api_key:
             config["api_key"] = settings_in.api_key
-        if settings_in.index is not None:
-            config["index"] = settings_in.index
-        if settings_in.location_field:
-            config["location_field"] = settings_in.location_field
+        config["index"] = settings_in.index
+        # Empty clears back to the default, same as url/index above.
+        config["location_field"] = settings_in.location_field or DEFAULT_ELASTICSEARCH_LOCATION_FIELD
         indoor_fields = dict(config.get("indoor_fields") or {})
         outdoor_fields = dict(config.get("outdoor_fields") or {})
         if settings_in.indoor_field:
@@ -234,7 +258,19 @@ class WeatherService:
             outdoor_fields.pop(settings_in.location_id, None)
         config["indoor_fields"] = indoor_fields
         config["outdoor_fields"] = outdoor_fields
-        self.storage.set_observation_source_settings("elasticsearch", config)
+        if not (
+            config.get("url")
+            or config.get("api_key")
+            or config.get("index")
+            or indoor_fields
+            or outdoor_fields
+        ):
+            # Nothing meaningful left to store (e.g. an empty form was
+            # submitted) - remove the row so the environment configuration,
+            # if any, takes effect again instead of a stale "ui" origin.
+            self.storage.delete_observation_source_settings("elasticsearch")
+        else:
+            self.storage.set_observation_source_settings("elasticsearch", config)
         return self.observation_sources_status()
 
     def delete_elasticsearch_settings(self) -> ObservationSourcesInfo:

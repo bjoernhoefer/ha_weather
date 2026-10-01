@@ -5,11 +5,16 @@ Queries the Search API with a daily ``date_histogram`` aggregation and
 the indoor field and once for the outdoor field (when configured for a
 location). This keeps the source generic: any index/document shape works as
 long as a numeric temperature field and a ``@timestamp`` field are present.
+``elasticsearch_location_field`` is matched with a ``term`` filter, so it
+must be a ``keyword`` field (or the ``.keyword`` sub-field of a ``text``
+field) - a plain ``text`` field is analyzed and will silently return no
+buckets.
 """
 
 from __future__ import annotations
 
 from typing import List, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -90,7 +95,8 @@ class ElasticsearchObservationSource(ObservationSource):
         past_days: int,
     ) -> dict:
         base_url = (settings.elasticsearch_url or "").rstrip("/")
-        url = f"{base_url}/{settings.elasticsearch_index}/_search"
+        index = quote(settings.elasticsearch_index or "", safe="")
+        url = f"{base_url}/{index}/_search"
         body = {
             "size": 0,
             "query": {

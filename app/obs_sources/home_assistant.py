@@ -102,7 +102,10 @@ def observations_from_history(
 
         last_value: Optional[float] = None
         event_index = 0
-        last_day = (end - timedelta(days=1)) if end is not None else events[-1][0].astimezone(tzinfo).date()
+        if end is not None:
+            last_day = end - timedelta(days=1)
+        else:
+            last_day = events[-1][0].astimezone(tzinfo).date()
         day = start
         while day <= last_day:
             day_values: List[float] = []

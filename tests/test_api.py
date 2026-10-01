@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.models import MAX_ENTITIES_PER_LOCATION, MAX_ENTITY_LENGTH, MAX_SETTING_LENGTH
 from app.service import WeatherService
 from app.storage import Storage
 
@@ -422,8 +423,6 @@ def test_home_assistant_settings_are_accepted_and_stored(api):
 
 
 def test_home_assistant_overlong_values_are_truncated_not_rejected(api):
-    from app.models import MAX_ENTITIES_PER_LOCATION, MAX_ENTITY_LENGTH, MAX_SETTING_LENGTH
-
     overlong_url = "http://homeassistant.local:8123/" + "a" * (MAX_SETTING_LENGTH + 50)
     overlong_token = "t" * (MAX_SETTING_LENGTH + 50)
     many_entities = [f"sensor.outdoor_{i}" for i in range(MAX_ENTITIES_PER_LOCATION + 10)]
@@ -536,8 +535,6 @@ def test_elasticsearch_settings_are_accepted_and_stored(api):
 
 
 def test_elasticsearch_overlong_values_are_truncated_not_rejected(api):
-    from app.models import MAX_ENTITY_LENGTH, MAX_SETTING_LENGTH
-
     overlong_index = "weather-" + "a" * (MAX_SETTING_LENGTH + 50)
     overlong_field = "outdoor_" + "b" * (MAX_ENTITY_LENGTH + 50)
 

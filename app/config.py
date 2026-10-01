@@ -9,6 +9,11 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+#: default Elasticsearch term field used to select a location's documents;
+#: shared with ``ElasticsearchSettingsInfo`` and the settings UI so the
+#: fallback only needs to change in one place.
+DEFAULT_ELASTICSEARCH_LOCATION_FIELD = "location_id"
+
 
 class Location(BaseModel):
     """A place the service produces forecasts for."""
@@ -91,7 +96,7 @@ class Settings(BaseSettings):
     elasticsearch_api_key: Optional[str] = None
     elasticsearch_index: Optional[str] = None
     #: term field used to select the documents of a location
-    elasticsearch_location_field: str = "location_id"
+    elasticsearch_location_field: str = DEFAULT_ELASTICSEARCH_LOCATION_FIELD
     #: ``location_id`` -> name of the indoor temperature field
     elasticsearch_indoor_fields: Dict[str, str] = Field(default_factory=dict)
     #: ``location_id`` -> name of the outdoor temperature field

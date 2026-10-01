@@ -19,14 +19,18 @@ import httpx
 
 from .config import Location, Settings
 from .models import Observation
-from .obs_sources import build_sources
+from .obs_sources import ObservationSource, build_sources
 from .obs_sources.open_meteo import OBSERVATION_URL, observations_from_payload  # noqa: F401
 
 LOGGER = logging.getLogger(__name__)
 
 
 async def _fetch_one(
-    source, client: httpx.AsyncClient, settings: Settings, location: Location, past_days: int
+    source: ObservationSource,
+    client: httpx.AsyncClient,
+    settings: Settings,
+    location: Location,
+    past_days: int,
 ) -> List[Observation]:
     try:
         return await source.fetch(client, settings, location, past_days)

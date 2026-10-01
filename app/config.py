@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -25,6 +25,57 @@ class Location(BaseModel):
     timezone: str = "UTC"
     #: 5 digit INE municipality code used by AEMET (Spanish locations only)
     aemet_municipality: Optional[str] = Field(default=None, pattern=r"^[0-9]{5}$")
+
+
+#: id of the implicit Home Assistant instance built from the
+#: ``HAW_HOME_ASSISTANT_URL``/``HAW_HOME_ASSISTANT_TOKEN`` environment variables
+ENVIRONMENT_INSTANCE_ID = "environment"
+
+
+class HomeAssistantInstance(BaseModel):
+    """One Home Assistant installation that measurements can be read from."""
+
+    id: str = Field(pattern=r"^[a-z0-9_]{1,40}$")
+    name: str = Field(min_length=1, max_length=100)
+    url: Optional[str] = None
+    token: Optional[str] = None
+
+
+class Measurement(BaseModel):
+    """One Home Assistant sensor coupled with an instance and a location."""
+
+    #: database id, ``None`` for measurements from the environment
+    id: Optional[int] = None
+    instance_id: str
+    location_id: str
+    entity_id: str
+    scope: Literal["indoor", "outdoor"] = "outdoor"
+    name: str = ""
+
+
+class ElasticsearchInstance(BaseModel):
+    """One Elasticsearch deployment/index that temperature fields are read from."""
+
+    id: str = Field(pattern=r"^[a-z0-9_]{1,40}$")
+    name: str = Field(min_length=1, max_length=100)
+    url: Optional[str] = None
+    api_key: Optional[str] = None
+    index: Optional[str] = None
+    #: term field used to select the documents of a location
+    location_field: str = DEFAULT_ELASTICSEARCH_LOCATION_FIELD
+
+
+class ElasticsearchMeasurement(BaseModel):
+    """One numeric temperature field coupled with an Elasticsearch instance
+    and a location."""
+
+    #: database id, ``None`` for measurements from the environment
+    id: Optional[int] = None
+    instance_id: str
+    location_id: str
+    field: str
+    scope: Literal["indoor", "outdoor"] = "outdoor"
+    name: str = ""
 
 
 DEFAULT_LOCATIONS: List[Location] = [
@@ -89,6 +140,10 @@ class Settings(BaseSettings):
     home_assistant_indoor_entities: Dict[str, List[str]] = Field(default_factory=dict)
     #: ``location_id`` -> list of entity ids, e.g. ``sensor.garden_temperature``
     home_assistant_outdoor_entities: Dict[str, List[str]] = Field(default_factory=dict)
+    #: additional Home Assistant installations (JSON list), e.g. managed in the web UI
+    home_assistant_instances: List[HomeAssistantInstance] = Field(default_factory=list)
+    #: sensors coupled with an instance and a location (JSON list)
+    home_assistant_measurements: List[Measurement] = Field(default_factory=list)
 
     # Elasticsearch (e.g. the free Elastic Cloud tier): aggregates a numeric
     # temperature field per day using the Search API.
@@ -101,6 +156,10 @@ class Settings(BaseSettings):
     elasticsearch_indoor_fields: Dict[str, str] = Field(default_factory=dict)
     #: ``location_id`` -> name of the outdoor temperature field
     elasticsearch_outdoor_fields: Dict[str, str] = Field(default_factory=dict)
+    #: additional Elasticsearch deployments (JSON list), e.g. managed in the web UI
+    elasticsearch_instances: List[ElasticsearchInstance] = Field(default_factory=list)
+    #: temperature fields coupled with an instance and a location (JSON list)
+    elasticsearch_measurements: List[ElasticsearchMeasurement] = Field(default_factory=list)
 
     # --- Azure AI Foundry verification ---------------------------------
     azure_foundry_endpoint: Optional[str] = None
@@ -135,6 +194,22 @@ class Settings(BaseSettings):
             if value.startswith("["):
                 return json.loads(value)
             return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator(
+        "home_assistant_instances",
+        "home_assistant_measurements",
+        "elasticsearch_instances",
+        "elasticsearch_measurements",
+        mode="before",
+    )
+    @classmethod
+    def _parse_json_list(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return []
+            return json.loads(value)
         return value
 
     @field_validator(

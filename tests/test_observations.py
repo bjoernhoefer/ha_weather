@@ -9,8 +9,9 @@ from app.config import Location, Settings
 from app.models import Observation
 from app.observations import fetch_observations
 from app.obs_sources import build_sources, registered_sources
+from app.obs_sources.elasticsearch import AUTH_SCHEME as ES_AUTH_SCHEME
 from app.obs_sources.elasticsearch import observations_from_aggregation
-from app.obs_sources.home_assistant import observations_from_history
+from app.obs_sources.home_assistant import AUTH_SCHEME, observations_from_history
 
 VIENNA = Location(
     id="vienna",
@@ -194,6 +195,85 @@ def test_elasticsearch_aggregation_is_parsed_into_observations():
     assert observations[0].scope == "outdoor"
 
 
+def test_elasticsearch_instances_need_url_key_and_index():
+    settings = Settings(
+        database_path=":memory:",
+        observation_sources=["elasticsearch"],
+        elasticsearch_instances=[{"id": "partial", "name": "Partial", "url": "https://p.es.io"}],
+        elasticsearch_measurements=[
+            {"instance_id": "partial", "location_id": "vienna", "field": "t"}
+        ],
+    )
+    assert build_sources(settings) == []
+
+
+async def test_elasticsearch_reads_every_instance_and_survives_a_failing_one(today):
+    settings = Settings(
+        database_path=":memory:",
+        observation_sources=["elasticsearch"],
+        elasticsearch_url="https://env.es.io",
+        elasticsearch_api_key="k0",
+        elasticsearch_index="env",
+        elasticsearch_indoor_fields={"vienna": "indoor_temp"},
+        elasticsearch_instances=[
+            {"id": "cloud", "name": "Cloud", "url": "https://cloud.es.io", "api_key": "k1",
+             "index": "weather", "location_field": "site"},
+            {"id": "broken", "name": "Broken", "url": "https://broken.es.io", "api_key": "k2",
+             "index": "weather"},
+        ],
+        elasticsearch_measurements=[
+            {"instance_id": "cloud", "location_id": "vienna", "field": "outdoor_temp"},
+            {"instance_id": "environment", "location_id": "vienna", "field": "garden"},
+            {"instance_id": "broken", "location_id": "vienna", "field": "x"},
+            {"instance_id": "cloud", "location_id": "porto_cristo", "field": "y"},
+        ],
+    )
+    yesterday = today - timedelta(days=1)
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        body = json.loads(request.content)
+        field = body["aggs"]["per_day"]["aggs"]["min_temperature"]["min"]["field"]
+        term = body["query"]["bool"]["filter"][0]["term"]
+        seen.append((request.url.host, request.url.path, request.headers["Authorization"], field, term))
+        if request.url.host == "broken.es.io":
+            return httpx.Response(500)
+        low, high = {"outdoor_temp": (5.0, 15.0), "garden": (3.0, 12.0), "indoor_temp": (20.0, 22.0)}[field]
+        return httpx.Response(
+            200,
+            json={
+                "aggregations": {
+                    "per_day": {
+                        "buckets": [
+                            {
+                                "key_as_string": f"{yesterday.isoformat()}T00:00:00.000+01:00",
+                                "min_temperature": {"value": low},
+                                "max_temperature": {"value": high},
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        observations = await fetch_observations(client, settings, VIENNA)
+
+    assert sorted(seen) == [
+        ("broken.es.io", "/weather/_search", f"{ES_AUTH_SCHEME} k2", "x", {"location_id": "vienna"}),
+        ("cloud.es.io", "/weather/_search", f"{ES_AUTH_SCHEME} k1", "outdoor_temp", {"site": "vienna"}),
+        ("env.es.io", "/env/_search", f"{ES_AUTH_SCHEME} k0", "garden", {"location_id": "vienna"}),
+        ("env.es.io", "/env/_search", f"{ES_AUTH_SCHEME} k0", "indoor_temp", {"location_id": "vienna"}),
+    ]
+    by_scope = {item.scope: item for item in observations if item.target_date == yesterday}
+    # several outdoor fields of one day are merged: lowest min, highest max
+    assert (by_scope["outdoor"].temperature_min, by_scope["outdoor"].temperature_max) == (3.0, 15.0)
+    assert (by_scope["indoor"].temperature_min, by_scope["indoor"].temperature_max) == (20.0, 22.0)
+    assert len(observations) == 2
+
+
 async def test_fetch_observations_merges_enabled_sources(today):
     settings = Settings(
         database_path=":memory:",
@@ -237,3 +317,76 @@ async def test_fetch_observations_merges_enabled_sources(today):
     scopes = {(item.scope, item.source) for item in observations}
     assert ("outdoor", "open_meteo") in scopes
     assert ("indoor", "home_assistant") in scopes
+
+
+async def test_home_assistant_reads_every_instance_and_survives_a_failing_one(today):
+    settings = Settings(
+        database_path=":memory:",
+        observation_sources=["home_assistant"],
+        home_assistant_instances=[
+            {"id": "home", "name": "Home", "url": "http://home.local:8123", "token": "t1"},
+            {"id": "cabin", "name": "Cabin", "url": "http://cabin.local:8123", "token": "t2"},
+            {"id": "broken", "name": "Broken", "url": "http://broken.local", "token": "t3"},
+            {"id": "no_token", "name": "No token", "url": "http://no-token.local"},
+        ],
+        home_assistant_measurements=[
+            {"instance_id": "home", "location_id": "vienna", "entity_id": "sensor.garden"},
+            {"instance_id": "cabin", "location_id": "vienna", "entity_id": "sensor.porch"},
+            {"instance_id": "broken", "location_id": "vienna", "entity_id": "sensor.x"},
+            {"instance_id": "no_token", "location_id": "vienna", "entity_id": "sensor.y"},
+            {"instance_id": "home", "location_id": "porto_cristo", "entity_id": "sensor.z"},
+        ],
+    )
+    yesterday = today - timedelta(days=1)
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(
+            (
+                request.url.host,
+                request.headers["Authorization"],
+                request.url.params["filter_entity_id"],
+            )
+        )
+        if request.url.host == "broken.local":
+            return httpx.Response(500)
+        value = "12.0" if request.url.host == "home.local" else "18.0"
+        return httpx.Response(
+            200,
+            json=[[{"state": value, "last_changed": f"{yesterday.isoformat()}T10:00:00+00:00"}]],
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        observations = await fetch_observations(client, settings, VIENNA)
+
+    assert sorted(seen) == [
+        ("broken.local", f"{AUTH_SCHEME} t3", "sensor.x"),
+        ("cabin.local", f"{AUTH_SCHEME} t2", "sensor.porch"),
+        ("home.local", f"{AUTH_SCHEME} t1", "sensor.garden"),
+    ]
+    day = {item.target_date: item for item in observations}[yesterday]
+    assert (day.temperature_min, day.temperature_max, day.scope) == (12.0, 18.0, "outdoor")
+
+
+def test_home_assistant_hourly_means_carry_values_forward():
+    from datetime import datetime, timezone
+
+    from app.obs_sources.home_assistant import hourly_means
+
+    start = datetime(2024, 1, 1, 0, tzinfo=timezone.utc)
+    end = datetime(2024, 1, 1, 4, tzinfo=timezone.utc)
+    history = [
+        [
+            {"state": "10.0", "last_changed": "2023-12-31T23:00:00+00:00"},
+            {"state": "14.0", "last_changed": "2024-01-01T01:30:00+00:00"},
+            {"state": "unavailable", "last_changed": "2024-01-01T02:10:00+00:00"},
+        ],
+        [{"state": "20.0", "last_changed": "2024-01-01T03:15:00+00:00"}],
+    ]
+    means = hourly_means(history, start, end)
+    assert means == {
+        start: 10.0,
+        start.replace(hour=1): 12.0,  # 10.0 carried in, 14.0 at 01:30
+        start.replace(hour=2): 14.0,
+        start.replace(hour=3): 17.0,  # 14.0 carried + 20.0 of the second sensor
+    }

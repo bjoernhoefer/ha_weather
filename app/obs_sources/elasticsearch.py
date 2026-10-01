@@ -5,22 +5,33 @@ Queries the Search API with a daily ``date_histogram`` aggregation and
 the indoor field and once for the outdoor field (when configured for a
 location). This keeps the source generic: any index/document shape works as
 long as a numeric temperature field and a ``@timestamp`` field are present.
-``elasticsearch_location_field`` is matched with a ``term`` filter, so it
-must be a ``keyword`` field (or the ``.keyword`` sub-field of a ``text``
+Any number of Elasticsearch instances (deployment + index) is supported;
+each temperature field is configured as a measurement coupled with an
+instance and a location. The instance's ``location_field`` is matched with a
+``term`` filter, so it must be a ``keyword`` field (or the ``.keyword`` sub-field of a ``text``
 field) - a plain ``text`` field is analyzed and will silently return no
 buckets.
 """
 
 from __future__ import annotations
 
-from typing import List, Optional
+import logging
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 import httpx
 
-from ..config import Location, Settings
+from ..config import (
+    ENVIRONMENT_INSTANCE_ID,
+    ElasticsearchInstance,
+    ElasticsearchMeasurement,
+    Location,
+    Settings,
+)
 from ..models import Observation
 from .base import ObservationSource, register
+
+LOGGER = logging.getLogger(__name__)
 
 #: the HTTP authentication scheme used for Elasticsearch API keys
 AUTH_SCHEME = "ApiKey"
@@ -54,9 +65,78 @@ def observations_from_aggregation(
     return observations
 
 
+def effective_instances(settings: Settings) -> Dict[str, ElasticsearchInstance]:
+    """Every configured Elasticsearch instance by id.
+
+    ``HAW_ELASTICSEARCH_URL``/``_API_KEY``/``_INDEX``/``_LOCATION_FIELD`` form
+    the implicit :data:`ENVIRONMENT_INSTANCE_ID` instance, additional ones
+    come from ``Settings.elasticsearch_instances`` (e.g. added in the web UI).
+    """
+    instances: Dict[str, ElasticsearchInstance] = {}
+    if (
+        settings.elasticsearch_url
+        or settings.elasticsearch_api_key
+        or settings.elasticsearch_index
+    ):
+        instances[ENVIRONMENT_INSTANCE_ID] = ElasticsearchInstance(
+            id=ENVIRONMENT_INSTANCE_ID,
+            name="Elasticsearch (environment)",
+            url=settings.elasticsearch_url,
+            api_key=settings.elasticsearch_api_key,
+            index=settings.elasticsearch_index,
+            location_field=settings.elasticsearch_location_field,
+        )
+    for instance in settings.elasticsearch_instances:
+        instances.setdefault(instance.id, instance)
+    return instances
+
+
+def effective_measurements(settings: Settings) -> List[ElasticsearchMeasurement]:
+    """All field mappings, including the legacy per-location field mappings
+    (``HAW_ELASTICSEARCH_*_FIELDS``) of the environment instance."""
+    measurements: List[ElasticsearchMeasurement] = []
+    for scope, mapping in (
+        ("indoor", settings.elasticsearch_indoor_fields),
+        ("outdoor", settings.elasticsearch_outdoor_fields),
+    ):
+        for location_id, field in mapping.items():
+            if field:
+                measurements.append(
+                    ElasticsearchMeasurement(
+                        instance_id=ENVIRONMENT_INSTANCE_ID,
+                        location_id=location_id,
+                        field=field,
+                        scope=scope,
+                    )
+                )
+    measurements.extend(settings.elasticsearch_measurements)
+    return measurements
+
+
+def usable(instance: Optional[ElasticsearchInstance]) -> bool:
+    return bool(instance and instance.url and instance.api_key and instance.index)
+
+
+def merge_observations(observations: List[Observation]) -> List[Observation]:
+    """Combine observations of the same day and scope (several fields or
+    instances): lowest minimum and highest maximum win."""
+    merged: Dict[Tuple[str, str], Observation] = {}
+    for item in observations:
+        key = (item.target_date.isoformat(), item.scope)
+        current = merged.get(key)
+        if current is None:
+            merged[key] = item.model_copy()
+            continue
+        values_min = [v for v in (current.temperature_min, item.temperature_min) if v is not None]
+        values_max = [v for v in (current.temperature_max, item.temperature_max) if v is not None]
+        current.temperature_min = min(values_min) if values_min else None
+        current.temperature_max = max(values_max) if values_max else None
+    return [merged[key] for key in sorted(merged)]
+
+
 @register
 class ElasticsearchObservationSource(ObservationSource):
-    """Indoor and outdoor temperature fields read from an Elasticsearch index."""
+    """Indoor and outdoor temperature fields read from Elasticsearch indices."""
 
     name = "elasticsearch"
     description = (
@@ -66,47 +146,38 @@ class ElasticsearchObservationSource(ObservationSource):
     api_key_setting = "elasticsearch_api_key"
 
     def is_available(self) -> bool:
-        return bool(
-            self.settings.elasticsearch_url
-            and self.settings.elasticsearch_api_key
-            and self.settings.elasticsearch_index
-        )
+        return any(usable(item) for item in effective_instances(self.settings).values())
+
+    def measurements_for(self, location: Location) -> List[ElasticsearchMeasurement]:
+        """Field mappings of ``location`` whose instance is usable."""
+        instances = effective_instances(self.settings)
+        return [
+            item
+            for item in effective_measurements(self.settings)
+            if item.location_id == location.id
+            and usable(instances.get(item.instance_id))
+        ]
 
     def supports(self, location: Location) -> bool:
-        return bool(
-            self.settings.elasticsearch_indoor_fields.get(location.id)
-            or self.settings.elasticsearch_outdoor_fields.get(location.id)
-        )
-
-    def _field_for(self, settings: Settings, location: Location, scope: str) -> Optional[str]:
-        mapping = (
-            settings.elasticsearch_indoor_fields
-            if scope == "indoor"
-            else settings.elasticsearch_outdoor_fields
-        )
-        return mapping.get(location.id)
+        return bool(self.measurements_for(location))
 
     async def _aggregate(
         self,
         client: httpx.AsyncClient,
-        settings: Settings,
+        instance: ElasticsearchInstance,
         location: Location,
         field: str,
         past_days: int,
     ) -> dict:
-        base_url = (settings.elasticsearch_url or "").rstrip("/")
-        index = quote(settings.elasticsearch_index or "", safe="")
+        base_url = (instance.url or "").rstrip("/")
+        index = quote(instance.index or "", safe="")
         url = f"{base_url}/{index}/_search"
         body = {
             "size": 0,
             "query": {
                 "bool": {
                     "filter": [
-                        {
-                            "term": {
-                                settings.elasticsearch_location_field: location.id
-                            }
-                        },
+                        {"term": {instance.location_field: location.id}},
                         {
                             "range": {
                                 "@timestamp": {
@@ -133,7 +204,7 @@ class ElasticsearchObservationSource(ObservationSource):
                 }
             },
         }
-        auth_header = " ".join([AUTH_SCHEME, str(settings.elasticsearch_api_key)])
+        auth_header = " ".join([AUTH_SCHEME, str(instance.api_key)])
         response = await client.post(
             url,
             json=body,
@@ -149,13 +220,22 @@ class ElasticsearchObservationSource(ObservationSource):
         location: Location,
         past_days: int = 7,
     ) -> List[Observation]:
+        instances = effective_instances(self.settings)
         observations: List[Observation] = []
-        for scope in ("indoor", "outdoor"):
-            field = self._field_for(settings, location, scope)
-            if not field:
+        for item in self.measurements_for(location):
+            try:
+                payload = await self._aggregate(
+                    client, instances[item.instance_id], location, item.field, past_days
+                )
+            except Exception as exc:  # noqa: BLE001 - one instance must not break all
+                LOGGER.warning(
+                    "Elasticsearch instance %s failed for %s: %s",
+                    item.instance_id,
+                    location.id,
+                    exc,
+                )
                 continue
-            payload = await self._aggregate(client, settings, location, field, past_days)
             observations.extend(
-                observations_from_aggregation(payload, location.id, scope)
+                observations_from_aggregation(payload, location.id, item.scope)
             )
-        return observations
+        return merge_observations(observations)

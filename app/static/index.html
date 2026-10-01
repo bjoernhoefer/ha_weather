@@ -21,6 +21,17 @@
       button { padding: .35rem .7rem; cursor: pointer; }
       input[type="number"] { width: 5rem; }
       #status { min-height: 1.2rem; }
+      details.fold { margin-bottom: 1rem; border: 1px solid #8884; border-radius: .4rem; padding: .3rem .8rem; max-width: 72rem; }
+      details.fold[open] { padding-bottom: .8rem; }
+      details.fold > summary { cursor: pointer; padding: .3rem 0; }
+      details.fold > summary > h2, details.fold > summary > h3 { display: inline; margin: 0; }
+      details.fold > summary > h2 { font-size: 1.25rem; }
+      details.fold > summary > h3 { font-size: 1.05rem; }
+      details.sub { border-style: dashed; margin-top: .6rem; }
+      .error { color: #c40; }
+      .good { color: #0a7; }
+      form.bar { margin-top: .8rem; }
+      td .bar { flex-wrap: nowrap; }
     </style>
   </head>
   <body>
@@ -31,19 +42,79 @@
 
     <section class="bar">
       <label>Location <select id="location"></select></label>
-      <label>API key <input id="apiKey" type="password" placeholder="only for public mode" /></label>
       <button id="reload">Reload</button>
       <button id="refresh">Refresh forecast</button>
       <button id="verify">Verify with Azure AI Foundry</button>
     </section>
 
-    <p id="status" class="muted"></p>
+    <p id="status" class="muted" role="status"></p>
 
-    <section>
-      <h2>Top / Low providers</h2>
+    <details class="fold" id="forecastSection" open>
+      <summary><h2>Forecast</h2></summary>
+
+      <details class="fold sub" id="next24Section" open>
+        <summary><h3>Next 24 hours (updated hourly)</h3></summary>
+        <table>
+          <thead>
+            <tr><th>Time</th><th>Temperature &deg;C</th><th>Precip mm</th><th>Wind</th><th>Condition</th><th>Providers</th></tr>
+          </thead>
+          <tbody id="hourlyForecast"></tbody>
+        </table>
+      </details>
+
+      <details class="fold sub" id="historySection">
+        <summary><h3>History &ndash; last 24 hours</h3></summary>
+        <p class="muted">
+          The first archived hourly consensus prediction of every past hour
+          compared with the measured values (Home Assistant outdoor
+          measurements when configured, otherwise Open-Meteo). Error =
+          predicted &minus; measured.
+        </p>
+        <p id="historySummary"></p>
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th><th>Predicted &deg;C</th><th>Measured &deg;C</th><th>Error K</th>
+              <th>Predicted mm</th><th>Measured mm</th><th>Error mm</th>
+              <th>Predicted condition</th><th>Measured condition</th><th>Lead h</th>
+            </tr>
+          </thead>
+          <tbody id="history"></tbody>
+        </table>
+      </details>
+
+      <details class="fold sub" id="next48Section">
+        <summary><h3>Next 48 hours (4-hour intervals)</h3></summary>
+        <table>
+          <thead>
+            <tr><th>Time</th><th>Temperature &deg;C</th><th>Precip mm</th><th>Wind</th><th>Condition</th><th>Providers</th></tr>
+          </thead>
+          <tbody id="fourHourlyForecast"></tbody>
+        </table>
+      </details>
+
+      <details class="fold sub" id="daysSection">
+        <summary><h3>Next 3&ndash;7 days</h3></summary>
+        <table>
+          <thead>
+            <tr><th>Date</th><th>Min &deg;C</th><th>Max &deg;C</th><th>Precip mm</th><th>Wind</th><th>Condition</th><th>Providers</th><th>ET0 mm</th><th>Water balance mm</th><th>Sunshine h</th><th>Radiation MJ/m&sup2;</th><th>Soil moisture m&sup3;/m&sup3;</th></tr>
+          </thead>
+          <tbody id="forecast"></tbody>
+        </table>
+      </details>
+    </details>
+
+    <details class="fold" id="seasonSection">
+      <summary><h2>Seasons</h2></summary>
+      <p class="muted">Meteorological season and upcoming weather changes.</p>
+      <table><tbody id="season"></tbody></table>
+    </details>
+
+    <details class="fold" id="providersSection">
+      <summary><h2>Providers</h2></summary>
       <p class="muted">
-        The ranking is calculated from the measured accuracy. Set a manual rank
-        (lower wins) or disable a provider to override it.
+        The Top/Low ranking is calculated from the measured accuracy. Set a
+        manual rank (lower wins) or disable a provider to override it.
       </p>
       <table>
         <thead>
@@ -55,10 +126,10 @@
         </thead>
         <tbody id="ranking"></tbody>
       </table>
-    </section>
+    </details>
 
-    <section>
-      <h2>Source control</h2>
+    <details class="fold" id="sourcesSection">
+      <summary><h2>Source control</h2></summary>
       <p class="muted">
         Switch weather sources on or off for all locations. Sources without an
         API key can be added as any keyless Open-Meteo weather model. API keys
@@ -74,95 +145,192 @@
         </thead>
         <tbody id="sources"></tbody>
       </table>
-      <form id="addSource" class="bar" style="margin-top: .8rem">
+      <form id="addSource" class="bar">
         <label>Id <input id="sourceName" required pattern="[a-z0-9_]{2,40}" placeholder="e.g. icon_d2" /></label>
         <label>Open-Meteo model <input id="sourceModel" required pattern="[a-z0-9_]{2,64}" list="modelCatalog" placeholder="e.g. icon_d2" /></label>
         <datalist id="modelCatalog"></datalist>
         <label>Description <input id="sourceDescription" maxlength="200" placeholder="optional" /></label>
         <button type="submit">Add source</button>
       </form>
-    </section>
+    </details>
 
-    <section>
-      <h2>Ground truth observations</h2>
+    <details class="fold" id="measurementsSection">
+      <summary><h2>Real world measurements</h2></summary>
       <p class="muted">
-        Home Assistant and Elasticsearch access details are shared across all
-        locations; sensor/field mappings apply to the location selected above.
-        Tokens and API keys are stored on the server and never shown again.
+        Measured values verify the providers and the history. Add every Home
+        Assistant or Elasticsearch instance once, then couple its sensors or
+        fields with an instance and a location in the lists below. Only
+        outdoor measurements are used to score the providers. Tokens and API keys are stored on the server and
+        never shown again.
       </p>
-      <h3>Home Assistant</h3>
+
+      <h3>Home Assistant instances</h3>
       <p id="homeAssistantState" class="muted"></p>
-      <form id="homeAssistantForm" class="bar">
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Id</th><th>URL</th><th>Token</th><th>Origin</th><th>Measurements</th><th></th></tr>
+        </thead>
+        <tbody id="haInstances"></tbody>
+      </table>
+      <form id="haInstanceForm" class="bar">
+        <label>Name <input id="haName" required maxlength="100" placeholder="e.g. Vienna flat" /></label>
         <label>URL <input id="haUrl" type="url" maxlength="500" placeholder="http://homeassistant.local:8123" /></label>
-        <label>Long-lived token <input id="haToken" type="password" autocomplete="off" maxlength="500" placeholder="new token" /></label>
-        <label>Indoor entities <input id="haIndoorEntities" maxlength="2000" placeholder="sensor.living_room_temperature, ..." /></label>
-        <label>Outdoor entities <input id="haOutdoorEntities" maxlength="2000" placeholder="sensor.garden_temperature, ..." /></label>
-        <button type="submit">Save</button>
-        <button type="button" id="homeAssistantRemove">Remove</button>
+        <label>Long-lived token <input id="haToken" type="password" autocomplete="off" maxlength="500" placeholder="token" /></label>
+        <button type="submit" id="haInstanceSubmit">Add instance</button>
+        <button type="button" id="haInstanceCancel" hidden>Cancel</button>
       </form>
-      <h3>Elasticsearch</h3>
+
+      <h3>Measurements</h3>
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Entity</th><th>Location</th><th>Instance</th><th>Scope</th><th>Origin</th><th></th></tr>
+        </thead>
+        <tbody id="measurements"></tbody>
+      </table>
+      <form id="measurementForm" class="bar">
+        <label>Instance <select id="measurementInstance" required></select></label>
+        <label>Location <select id="measurementLocation" required></select></label>
+        <label>Entity <input id="measurementEntity" required maxlength="200" pattern="[a-z0-9_]+\.[a-z0-9_]+" placeholder="sensor.garden_temperature" /></label>
+        <label>Scope
+          <select id="measurementScope">
+            <option value="outdoor">outdoor</option>
+            <option value="indoor">indoor</option>
+          </select>
+        </label>
+        <label>Name <input id="measurementName" maxlength="100" placeholder="optional" /></label>
+        <button type="submit" id="measurementSubmit">Add measurement</button>
+        <button type="button" id="measurementCancel" hidden>Cancel</button>
+      </form>
+
+      <h3>Elasticsearch instances</h3>
       <p id="elasticsearchState" class="muted"></p>
-      <form id="elasticsearchForm" class="bar">
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Id</th><th>URL</th><th>Index</th><th>Location field</th><th>API key</th><th>Origin</th><th>Fields</th><th></th></tr>
+        </thead>
+        <tbody id="esInstances"></tbody>
+      </table>
+      <form id="esInstanceForm" class="bar">
+        <label>Name <input id="esName" required maxlength="100" placeholder="e.g. Elastic Cloud" /></label>
         <label>URL <input id="esUrl" type="url" maxlength="500" placeholder="https://my-deployment.es.io" /></label>
-        <label>API key <input id="esApiKey" type="password" autocomplete="off" maxlength="500" placeholder="new API key" /></label>
+        <label>API key <input id="esApiKey" type="password" autocomplete="off" maxlength="500" placeholder="API key" /></label>
         <label>Index <input id="esIndex" maxlength="500" placeholder="weather" /></label>
         <label>Location field <input id="esLocationField" maxlength="200" placeholder="location_id" /></label>
-        <label>Indoor field <input id="esIndoorField" maxlength="200" placeholder="indoor_temperature" /></label>
-        <label>Outdoor field <input id="esOutdoorField" maxlength="200" placeholder="outdoor_temperature" /></label>
-        <button type="submit">Save</button>
-        <button type="button" id="elasticsearchRemove">Remove</button>
+        <button type="submit" id="esInstanceSubmit">Add instance</button>
+        <button type="button" id="esInstanceCancel" hidden>Cancel</button>
       </form>
-    </section>
 
-    <section>
-      <h2>Season &amp; weather change</h2>
-      <table><tbody id="season"></tbody></table>
-    </section>
+      <h3>Elasticsearch fields</h3>
+      <p class="muted">
+        Each entry reads the daily minimum/maximum of a numeric temperature
+        field. Documents are selected by the instance's location field, which
+        must contain the location id.
+      </p>
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Field</th><th>Location</th><th>Instance</th><th>Scope</th><th>Origin</th><th></th></tr>
+        </thead>
+        <tbody id="esMeasurements"></tbody>
+      </table>
+      <form id="esMeasurementForm" class="bar">
+        <label>Instance <select id="esMeasurementInstance" required></select></label>
+        <label>Location <select id="esMeasurementLocation" required></select></label>
+        <label>Field <input id="esMeasurementField" required maxlength="200" pattern="[A-Za-z0-9_@.\-]+" placeholder="outdoor_temperature" /></label>
+        <label>Scope
+          <select id="esMeasurementScope">
+            <option value="outdoor">outdoor</option>
+            <option value="indoor">indoor</option>
+          </select>
+        </label>
+        <label>Name <input id="esMeasurementName" maxlength="100" placeholder="optional" /></label>
+        <button type="submit" id="esMeasurementSubmit">Add field</button>
+        <button type="button" id="esMeasurementCancel" hidden>Cancel</button>
+      </form>
+    </details>
 
-    <section>
-      <h2>Consensus forecast</h2>
-      <h3>Next 24 hours (updated hourly)</h3>
+    <details class="fold" id="settingsSection">
+      <summary><h2>General settings</h2></summary>
+
+      <h3>Locations</h3>
+      <p class="muted">
+        Add a location by name; latitude/longitude are optional and improve
+        the accuracy (e.g. the exact garden instead of the city centre). Without
+        them the name is looked up with the Open-Meteo geocoding API, the time
+        zone is detected automatically. Locations from the environment
+        configuration cannot be deleted here.
+      </p>
       <table>
         <thead>
-          <tr><th>Time</th><th>Temperature &deg;C</th><th>Precip mm</th><th>Wind</th><th>Condition</th><th>Providers</th></tr>
+          <tr><th>Name</th><th>Id</th><th>Latitude</th><th>Longitude</th><th>Time zone</th><th>Origin</th><th></th></tr>
         </thead>
-        <tbody id="hourlyForecast"></tbody>
+        <tbody id="locations"></tbody>
       </table>
-      <h3>Next 48 hours (4-hour intervals)</h3>
-      <table>
-        <thead>
-          <tr><th>Time</th><th>Temperature &deg;C</th><th>Precip mm</th><th>Wind</th><th>Condition</th><th>Providers</th></tr>
-        </thead>
-        <tbody id="fourHourlyForecast"></tbody>
-      </table>
-      <h3>Days 3–7</h3>
-      <table>
-        <thead>
-          <tr><th>Date</th><th>Min &deg;C</th><th>Max &deg;C</th><th>Precip mm</th><th>Wind</th><th>Condition</th><th>Providers</th><th>ET0 mm</th><th>Water balance mm</th><th>Sunshine h</th><th>Radiation MJ/m&sup2;</th><th>Soil moisture m&sup3;/m&sup3;</th></tr>
-        </thead>
-        <tbody id="forecast"></tbody>
-      </table>
-    </section>
+      <form id="locationForm" class="bar">
+        <label>Name <input id="locationName" required maxlength="100" placeholder="e.g. Graz" /></label>
+        <label>Latitude <input id="locationLatitude" type="number" step="any" min="-90" max="90" placeholder="optional" /></label>
+        <label>Longitude <input id="locationLongitude" type="number" step="any" min="-180" max="180" placeholder="optional" /></label>
+        <label>Time zone <input id="locationTimezone" maxlength="64" placeholder="auto" /></label>
+        <button type="submit">Add location</button>
+      </form>
+
+      <h3>API key</h3>
+      <p class="muted">
+        Only needed when the service runs in public mode. The key is stored in
+        this browser and sent with every request.
+      </p>
+      <form id="apiKeyForm" class="bar">
+        <label>API key <input id="apiKey" type="password" autocomplete="off" placeholder="only for public mode" /></label>
+        <button type="submit">Save</button>
+        <button type="button" id="apiKeyClear">Clear</button>
+      </form>
+    </details>
 
     <script>
       const $ = (id) => document.getElementById(id);
+      const API_KEY_STORAGE = "ha_weather_api_key";
       const apiKeyInput = $("apiKey");
-      apiKeyInput.value = localStorage.getItem("ha_weather_api_key") || "";
-      apiKeyInput.addEventListener("change", () =>
-        localStorage.setItem("ha_weather_api_key", apiKeyInput.value)
-      );
+      apiKeyInput.value = localStorage.getItem(API_KEY_STORAGE) || "";
+      const storedApiKey = () => localStorage.getItem(API_KEY_STORAGE) || "";
 
       const setStatus = (text) => { $("status").textContent = text; };
 
+      function errorText(detail) {
+        try {
+          const parsed = JSON.parse(detail).detail;
+          if (typeof parsed === "string") return parsed;
+          if (Array.isArray(parsed)) return parsed.map((item) => item.msg).join("; ");
+        } catch (error) { /* not JSON */ }
+        return detail;
+      }
+
       async function api(path, options = {}) {
         const headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
-        if (apiKeyInput.value) headers["X-API-Key"] = apiKeyInput.value;
+        const key = storedApiKey();
+        if (key) headers["X-API-Key"] = key;
         const response = await fetch(path, Object.assign({}, options, { headers }));
         if (!response.ok) {
-          const detail = await response.text();
+          const detail = errorText(await response.text());
+          if (response.status === 401) {
+            // the API key lives in the general settings
+            $("settingsSection").open = true;
+            apiKeyInput.focus();
+            throw new Error("401: an API key is required, please enter it in the General settings.");
+          }
           throw new Error(`${response.status}: ${detail}`);
         }
         return response.json();
+      }
+
+      function button(text, onClick) {
+        const element = document.createElement("button");
+        element.type = "button";
+        element.textContent = text;
+        element.addEventListener("click", onClick);
+        return element;
+      }
+
+      function fmt(value, digits = 1) {
+        return value === null || value === undefined ? null : Number(value).toFixed(digits);
       }
 
       function cell(row, value) {
@@ -387,37 +555,237 @@
       }
 
       const OBS_ORIGINS = { ui: "set in web UI", environment: "from environment" };
+      let locations = [];
+      let observationSources = null;
+      let editingInstance = null;
+      let editingMeasurement = null;
+      let editingEsInstance = null;
+      let editingEsMeasurement = null;
 
-      function parseEntityList(value) {
-        // The server truncates to its configured maximum and the UI is
-        // re-rendered from its response, so no limit is duplicated here.
-        return value
-          .split(",")
-          .map((item) => item.trim())
-          .filter((item) => item.length > 0);
+      function locationName(locationId) {
+        const location = locations.find((item) => item.id === locationId);
+        return location ? location.name : `${locationId} (unknown)`;
+      }
+
+      function fillSelect(select, items, keep = true) {
+        const previous = select.value;
+        select.textContent = "";
+        items.forEach(([value, label]) => {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = label;
+          select.appendChild(option);
+        });
+        if (keep && items.some(([value]) => value === previous)) select.value = previous;
+      }
+
+      function renderInstances(ha) {
+        const body = $("haInstances");
+        body.textContent = "";
+        ha.instances.forEach((instance) => {
+          const row = document.createElement("tr");
+          cell(row, instance.name);
+          cell(row, instance.id);
+          cell(row, instance.url);
+          cell(row, instance.token_set ? "set" : "missing");
+          cell(row, OBS_ORIGINS[instance.origin]);
+          cell(row, instance.measurement_count);
+          const actions = document.createElement("td");
+          if (instance.origin === "ui") {
+            const box = document.createElement("div");
+            box.className = "bar";
+            box.append(
+              button("Edit", () => startInstanceEdit(instance)),
+              button("Delete", async () => {
+                const extra = instance.measurement_count
+                  ? ` and its ${instance.measurement_count} measurement(s)`
+                  : "";
+                if (!confirm(`Delete the Home Assistant instance ${instance.name}${extra}?`)) return;
+                try {
+                  renderObservationSources(await api(
+                    `/api/observation-sources/home-assistant/instances/${encodeURIComponent(instance.id)}`,
+                    { method: "DELETE" }
+                  ));
+                  if (editingInstance === instance.id) resetInstanceForm();
+                  setStatus(`Deleted Home Assistant instance ${instance.name}.`);
+                } catch (error) { setStatus(error.message); }
+              })
+            );
+            actions.appendChild(box);
+          } else {
+            actions.textContent = "read only";
+          }
+          row.appendChild(actions);
+          body.appendChild(row);
+        });
+        if (!ha.instances.length) {
+          const row = document.createElement("tr");
+          const td = cell(row, "No Home Assistant instance yet – add one below.");
+          td.colSpan = 7;
+          body.appendChild(row);
+        }
+        const measurements = ha.measurements.length;
+        $("homeAssistantState").textContent =
+          `${ha.instances.length} instance(s), ${measurements} measurement(s); ` +
+          (ha.enabled ? "Home Assistant measurements are used." : "Home Assistant measurements are not used yet.");
+        fillSelect(
+          $("measurementInstance"),
+          ha.instances.map((instance) => [instance.id, instance.name])
+        );
+      }
+
+      function renderMeasurements(ha) {
+        const body = $("measurements");
+        body.textContent = "";
+        const instanceNames = Object.fromEntries(ha.instances.map((item) => [item.id, item.name]));
+        ha.measurements.forEach((measurement) => {
+          const row = document.createElement("tr");
+          cell(row, measurement.name || "–");
+          cell(row, measurement.entity_id);
+          cell(row, locationName(measurement.location_id));
+          cell(row, instanceNames[measurement.instance_id] || `${measurement.instance_id} (unknown)`);
+          cell(row, measurement.scope);
+          cell(row, OBS_ORIGINS[measurement.origin]);
+          const actions = document.createElement("td");
+          if (measurement.origin === "ui") {
+            const box = document.createElement("div");
+            box.className = "bar";
+            box.append(
+              button("Edit", () => startMeasurementEdit(measurement)),
+              button("Delete", async () => {
+                if (!confirm(`Delete the measurement ${measurement.entity_id}?`)) return;
+                try {
+                  renderObservationSources(await api(
+                    `/api/observation-sources/home-assistant/measurements/${measurement.id}`,
+                    { method: "DELETE" }
+                  ));
+                  if (editingMeasurement === measurement.id) resetMeasurementForm();
+                  setStatus(`Deleted measurement ${measurement.entity_id}.`);
+                } catch (error) { setStatus(error.message); }
+              })
+            );
+            actions.appendChild(box);
+          } else {
+            actions.textContent = "read only";
+          }
+          row.appendChild(actions);
+          body.appendChild(row);
+        });
+        if (!ha.measurements.length) {
+          const row = document.createElement("tr");
+          const td = cell(row, "No measurement yet – add one below.");
+          td.colSpan = 7;
+          body.appendChild(row);
+        }
+      }
+
+      function renderEsInstances(es) {
+        const body = $("esInstances");
+        body.textContent = "";
+        es.instances.forEach((instance) => {
+          const row = document.createElement("tr");
+          cell(row, instance.name);
+          cell(row, instance.id);
+          cell(row, instance.url);
+          cell(row, instance.index);
+          cell(row, instance.location_field);
+          cell(row, instance.api_key_set ? "set" : "missing");
+          cell(row, OBS_ORIGINS[instance.origin]);
+          cell(row, instance.measurement_count);
+          const actions = document.createElement("td");
+          if (instance.origin === "ui") {
+            const box = document.createElement("div");
+            box.className = "bar";
+            box.append(
+              button("Edit", () => startEsInstanceEdit(instance)),
+              button("Delete", async () => {
+                const extra = instance.measurement_count
+                  ? ` and its ${instance.measurement_count} field(s)`
+                  : "";
+                if (!confirm(`Delete the Elasticsearch instance ${instance.name}${extra}?`)) return;
+                try {
+                  renderObservationSources(await api(
+                    `/api/observation-sources/elasticsearch/instances/${encodeURIComponent(instance.id)}`,
+                    { method: "DELETE" }
+                  ));
+                  if (editingEsInstance === instance.id) resetEsInstanceForm();
+                  setStatus(`Deleted Elasticsearch instance ${instance.name}.`);
+                } catch (error) { setStatus(error.message); }
+              })
+            );
+            actions.appendChild(box);
+          } else {
+            actions.textContent = "read only";
+          }
+          row.appendChild(actions);
+          body.appendChild(row);
+        });
+        if (!es.instances.length) {
+          const row = document.createElement("tr");
+          const td = cell(row, "No Elasticsearch instance yet – add one below.");
+          td.colSpan = 9;
+          body.appendChild(row);
+        }
+        $("elasticsearchState").textContent =
+          `${es.instances.length} instance(s), ${es.measurements.length} field(s); ` +
+          (es.enabled ? "Elasticsearch measurements are used." : "Elasticsearch measurements are not used yet.");
+        fillSelect(
+          $("esMeasurementInstance"),
+          es.instances.map((instance) => [instance.id, instance.name])
+        );
+      }
+
+      function renderEsMeasurements(es) {
+        const body = $("esMeasurements");
+        body.textContent = "";
+        const instanceNames = Object.fromEntries(es.instances.map((item) => [item.id, item.name]));
+        es.measurements.forEach((measurement) => {
+          const row = document.createElement("tr");
+          cell(row, measurement.name || "–");
+          cell(row, measurement.field);
+          cell(row, locationName(measurement.location_id));
+          cell(row, instanceNames[measurement.instance_id] || `${measurement.instance_id} (unknown)`);
+          cell(row, measurement.scope);
+          cell(row, OBS_ORIGINS[measurement.origin]);
+          const actions = document.createElement("td");
+          if (measurement.origin === "ui") {
+            const box = document.createElement("div");
+            box.className = "bar";
+            box.append(
+              button("Edit", () => startEsMeasurementEdit(measurement)),
+              button("Delete", async () => {
+                if (!confirm(`Delete the Elasticsearch field ${measurement.field}?`)) return;
+                try {
+                  renderObservationSources(await api(
+                    `/api/observation-sources/elasticsearch/measurements/${measurement.id}`,
+                    { method: "DELETE" }
+                  ));
+                  if (editingEsMeasurement === measurement.id) resetEsMeasurementForm();
+                  setStatus(`Deleted Elasticsearch field ${measurement.field}.`);
+                } catch (error) { setStatus(error.message); }
+              })
+            );
+            actions.appendChild(box);
+          } else {
+            actions.textContent = "read only";
+          }
+          row.appendChild(actions);
+          body.appendChild(row);
+        });
+        if (!es.measurements.length) {
+          const row = document.createElement("tr");
+          const td = cell(row, "No Elasticsearch field yet – add one below.");
+          td.colSpan = 7;
+          body.appendChild(row);
+        }
       }
 
       function renderObservationSources(sources) {
-        const locationId = $("location").value;
-        const ha = sources.home_assistant;
-        $("homeAssistantState").textContent =
-          `${ha.configured ? "configured" : "not configured"}` +
-          (ha.origin ? ` (${OBS_ORIGINS[ha.origin]})` : "") +
-          `, ${ha.available ? "available" : "unavailable"} for this location's sensors.`;
-        $("haUrl").value = ha.url || "";
-        $("haIndoorEntities").value = (ha.indoor_entities[locationId] || []).join(", ");
-        $("haOutdoorEntities").value = (ha.outdoor_entities[locationId] || []).join(", ");
-
-        const es = sources.elasticsearch;
-        $("elasticsearchState").textContent =
-          `${es.configured ? "configured" : "not configured"}` +
-          (es.origin ? ` (${OBS_ORIGINS[es.origin]})` : "") +
-          `, ${es.available ? "available" : "unavailable"} for this location's sensors.`;
-        $("esUrl").value = es.url || "";
-        $("esIndex").value = es.index || "";
-        $("esLocationField").value = es.location_field || "";
-        $("esIndoorField").value = es.indoor_fields[locationId] || "";
-        $("esOutdoorField").value = es.outdoor_fields[locationId] || "";
+        observationSources = sources;
+        renderInstances(sources.home_assistant);
+        renderMeasurements(sources.home_assistant);
+        renderEsInstances(sources.elasticsearch);
+        renderEsMeasurements(sources.elasticsearch);
       }
 
       async function loadObservationSources() {
@@ -426,69 +794,307 @@
         } catch (error) { setStatus(error.message); }
       }
 
-      $("homeAssistantForm").addEventListener("submit", async (event) => {
+      function resetInstanceForm() {
+        editingInstance = null;
+        $("haInstanceForm").reset();
+        $("haToken").placeholder = "token";
+        $("haInstanceSubmit").textContent = "Add instance";
+        $("haInstanceCancel").hidden = true;
+      }
+
+      function startInstanceEdit(instance) {
+        editingInstance = instance.id;
+        $("haName").value = instance.name;
+        $("haUrl").value = instance.url || "";
+        $("haToken").value = "";
+        $("haToken").placeholder = instance.token_set ? "keep current token" : "token";
+        $("haInstanceSubmit").textContent = "Save instance";
+        $("haInstanceCancel").hidden = false;
+        $("haName").focus();
+      }
+
+      $("haInstanceCancel").addEventListener("click", resetInstanceForm);
+      $("haInstanceForm").addEventListener("submit", async (event) => {
         event.preventDefault();
+        const payload = {
+          name: $("haName").value.trim(),
+          url: $("haUrl").value.trim() || null,
+          token: $("haToken").value.trim() || null,
+        };
         try {
-          const payload = {
-            url: $("haUrl").value.trim() || null,
-            token: $("haToken").value.trim() || null,
-            location_id: $("location").value,
-            indoor_entities: parseEntityList($("haIndoorEntities").value),
-            outdoor_entities: parseEntityList($("haOutdoorEntities").value),
-          };
-          renderObservationSources(
-            await api("/api/observation-sources/home-assistant", {
-              method: "PUT",
-              body: JSON.stringify(payload),
-            })
-          );
-          $("haToken").value = "";
-          setStatus("Home Assistant settings saved.");
+          const path = editingInstance
+            ? `/api/observation-sources/home-assistant/instances/${encodeURIComponent(editingInstance)}`
+            : "/api/observation-sources/home-assistant/instances";
+          renderObservationSources(await api(path, {
+            method: editingInstance ? "PUT" : "POST",
+            body: JSON.stringify(payload),
+          }));
+          setStatus(`Home Assistant instance ${payload.name} ${editingInstance ? "saved" : "added"}.`);
+          resetInstanceForm();
         } catch (error) { setStatus(error.message); }
       });
 
-      $("homeAssistantRemove").addEventListener("click", async () => {
-        if (!confirm("Remove the Home Assistant settings entered in the web UI?")) return;
-        try {
-          renderObservationSources(
-            await api("/api/observation-sources/home-assistant", { method: "DELETE" })
-          );
-          setStatus("Home Assistant settings removed.");
-        } catch (error) { setStatus(error.message); }
-      });
+      function resetMeasurementForm() {
+        editingMeasurement = null;
+        const instance = $("measurementInstance").value;
+        $("measurementForm").reset();
+        if (instance) $("measurementInstance").value = instance;
+        $("measurementLocation").value = $("location").value;
+        $("measurementSubmit").textContent = "Add measurement";
+        $("measurementCancel").hidden = true;
+      }
 
-      $("elasticsearchForm").addEventListener("submit", async (event) => {
+      function startMeasurementEdit(measurement) {
+        editingMeasurement = measurement.id;
+        $("measurementInstance").value = measurement.instance_id;
+        $("measurementLocation").value = measurement.location_id;
+        $("measurementEntity").value = measurement.entity_id;
+        $("measurementScope").value = measurement.scope;
+        $("measurementName").value = measurement.name || "";
+        $("measurementSubmit").textContent = "Save measurement";
+        $("measurementCancel").hidden = false;
+        $("measurementEntity").focus();
+      }
+
+      $("measurementCancel").addEventListener("click", resetMeasurementForm);
+      $("measurementForm").addEventListener("submit", async (event) => {
         event.preventDefault();
+        const payload = {
+          instance_id: $("measurementInstance").value,
+          location_id: $("measurementLocation").value,
+          entity_id: $("measurementEntity").value.trim(),
+          scope: $("measurementScope").value,
+          name: $("measurementName").value.trim(),
+        };
+        if (!payload.instance_id) { setStatus("Please add a Home Assistant instance first."); return; }
         try {
-          const payload = {
-            url: $("esUrl").value.trim() || null,
-            api_key: $("esApiKey").value.trim() || null,
-            index: $("esIndex").value.trim() || null,
-            location_field: $("esLocationField").value.trim() || null,
-            location_id: $("location").value,
-            indoor_field: $("esIndoorField").value.trim() || null,
-            outdoor_field: $("esOutdoorField").value.trim() || null,
-          };
-          renderObservationSources(
-            await api("/api/observation-sources/elasticsearch", {
-              method: "PUT",
-              body: JSON.stringify(payload),
-            })
-          );
-          $("esApiKey").value = "";
-          setStatus("Elasticsearch settings saved.");
+          const path = editingMeasurement
+            ? `/api/observation-sources/home-assistant/measurements/${editingMeasurement}`
+            : "/api/observation-sources/home-assistant/measurements";
+          renderObservationSources(await api(path, {
+            method: editingMeasurement ? "PUT" : "POST",
+            body: JSON.stringify(payload),
+          }));
+          setStatus(`Measurement ${payload.entity_id} ${editingMeasurement ? "saved" : "added"}.`);
+          resetMeasurementForm();
         } catch (error) { setStatus(error.message); }
       });
 
-      $("elasticsearchRemove").addEventListener("click", async () => {
-        if (!confirm("Remove the Elasticsearch settings entered in the web UI?")) return;
+      function resetEsInstanceForm() {
+        editingEsInstance = null;
+        $("esInstanceForm").reset();
+        $("esApiKey").placeholder = "API key";
+        $("esInstanceSubmit").textContent = "Add instance";
+        $("esInstanceCancel").hidden = true;
+      }
+
+      function startEsInstanceEdit(instance) {
+        editingEsInstance = instance.id;
+        $("esName").value = instance.name;
+        $("esUrl").value = instance.url || "";
+        $("esApiKey").value = "";
+        $("esApiKey").placeholder = instance.api_key_set ? "keep current API key" : "API key";
+        $("esIndex").value = instance.index || "";
+        $("esLocationField").value = instance.location_field || "";
+        $("esInstanceSubmit").textContent = "Save instance";
+        $("esInstanceCancel").hidden = false;
+        $("esName").focus();
+      }
+
+      $("esInstanceCancel").addEventListener("click", resetEsInstanceForm);
+      $("esInstanceForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const payload = {
+          name: $("esName").value.trim(),
+          url: $("esUrl").value.trim() || null,
+          api_key: $("esApiKey").value.trim() || null,
+          index: $("esIndex").value.trim() || null,
+          location_field: $("esLocationField").value.trim() || null,
+        };
         try {
-          renderObservationSources(
-            await api("/api/observation-sources/elasticsearch", { method: "DELETE" })
-          );
-          setStatus("Elasticsearch settings removed.");
+          const path = editingEsInstance
+            ? `/api/observation-sources/elasticsearch/instances/${encodeURIComponent(editingEsInstance)}`
+            : "/api/observation-sources/elasticsearch/instances";
+          renderObservationSources(await api(path, {
+            method: editingEsInstance ? "PUT" : "POST",
+            body: JSON.stringify(payload),
+          }));
+          setStatus(`Elasticsearch instance ${payload.name} ${editingEsInstance ? "saved" : "added"}.`);
+          resetEsInstanceForm();
         } catch (error) { setStatus(error.message); }
       });
+
+      function resetEsMeasurementForm() {
+        editingEsMeasurement = null;
+        const instance = $("esMeasurementInstance").value;
+        $("esMeasurementForm").reset();
+        if (instance) $("esMeasurementInstance").value = instance;
+        $("esMeasurementLocation").value = $("location").value;
+        $("esMeasurementSubmit").textContent = "Add field";
+        $("esMeasurementCancel").hidden = true;
+      }
+
+      function startEsMeasurementEdit(measurement) {
+        editingEsMeasurement = measurement.id;
+        $("esMeasurementInstance").value = measurement.instance_id;
+        $("esMeasurementLocation").value = measurement.location_id;
+        $("esMeasurementField").value = measurement.field;
+        $("esMeasurementScope").value = measurement.scope;
+        $("esMeasurementName").value = measurement.name || "";
+        $("esMeasurementSubmit").textContent = "Save field";
+        $("esMeasurementCancel").hidden = false;
+        $("esMeasurementField").focus();
+      }
+
+      $("esMeasurementCancel").addEventListener("click", resetEsMeasurementForm);
+      $("esMeasurementForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const payload = {
+          instance_id: $("esMeasurementInstance").value,
+          location_id: $("esMeasurementLocation").value,
+          field: $("esMeasurementField").value.trim(),
+          scope: $("esMeasurementScope").value,
+          name: $("esMeasurementName").value.trim(),
+        };
+        if (!payload.instance_id) { setStatus("Please add an Elasticsearch instance first."); return; }
+        try {
+          const path = editingEsMeasurement
+            ? `/api/observation-sources/elasticsearch/measurements/${editingEsMeasurement}`
+            : "/api/observation-sources/elasticsearch/measurements";
+          renderObservationSources(await api(path, {
+            method: editingEsMeasurement ? "PUT" : "POST",
+            body: JSON.stringify(payload),
+          }));
+          setStatus(`Elasticsearch field ${payload.field} ${editingEsMeasurement ? "saved" : "added"}.`);
+          resetEsMeasurementForm();
+        } catch (error) { setStatus(error.message); }
+      });
+
+      function renderLocations() {
+        const body = $("locations");
+        body.textContent = "";
+        locations.forEach((location) => {
+          const row = document.createElement("tr");
+          cell(row, location.name);
+          cell(row, location.id);
+          cell(row, location.latitude);
+          cell(row, location.longitude);
+          cell(row, location.timezone);
+          cell(row, location.custom ? "set in web UI" : "from environment");
+          const actions = document.createElement("td");
+          if (location.custom) {
+            actions.appendChild(button("Delete", async () => {
+              if (!confirm(`Delete the location ${location.name} and its measurements?`)) return;
+              try {
+                await applyLocations(await api(
+                  `/api/locations/${encodeURIComponent(location.id)}`, { method: "DELETE" }
+                ));
+                await loadObservationSources();
+                setStatus(`Deleted location ${location.name}.`);
+              } catch (error) { setStatus(error.message); }
+            }));
+          } else {
+            actions.textContent = "read only";
+          }
+          row.appendChild(actions);
+          body.appendChild(row);
+        });
+      }
+
+      async function applyLocations(items, preferred = null) {
+        const select = $("location");
+        const previous = select.value;
+        locations = items;
+        const options = items.map((location) => [location.id, location.name]);
+        fillSelect(select, options);
+        fillSelect($("measurementLocation"), options);
+        fillSelect($("esMeasurementLocation"), options);
+        if (preferred && items.some((item) => item.id === preferred)) select.value = preferred;
+        renderLocations();
+        if (select.value !== previous) await locationChanged();
+      }
+
+      $("locationForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const number = (id) => ($(id).value === "" ? null : Number($(id).value));
+        const payload = {
+          name: $("locationName").value.trim(),
+          latitude: number("locationLatitude"),
+          longitude: number("locationLongitude"),
+          timezone: $("locationTimezone").value.trim() || null,
+        };
+        try {
+          setStatus(`Adding ${payload.name}…`);
+          const items = await api("/api/locations", { method: "POST", body: JSON.stringify(payload) });
+          const added = items.find((item) => !locations.some((known) => known.id === item.id));
+          $("locationForm").reset();
+          await applyLocations(items, added ? added.id : null);
+          setStatus(`Added location ${payload.name}` + (added ? ` (${added.latitude}, ${added.longitude}, ${added.timezone}).` : "."));
+        } catch (error) { setStatus(error.message); }
+      });
+
+      $("apiKeyForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        localStorage.setItem(API_KEY_STORAGE, apiKeyInput.value.trim());
+        setStatus("API key saved in this browser.");
+        await init();
+      });
+      $("apiKeyClear").addEventListener("click", () => {
+        apiKeyInput.value = "";
+        localStorage.removeItem(API_KEY_STORAGE);
+        setStatus("API key removed from this browser.");
+      });
+
+      function renderHistory(history) {
+        const body = $("history");
+        body.textContent = "";
+        history.hours.forEach((hour) => {
+          const row = document.createElement("tr");
+          cell(row, new Date(hour.target_time).toLocaleString());
+          cell(row, hour.predicted_temperature);
+          const measured = cell(row, hour.measured_temperature);
+          if (hour.temperature_source) measured.title = `measured by ${hour.temperature_source}`;
+          const error = cell(row, fmt(hour.temperature_error));
+          if (hour.temperature_error !== null) {
+            error.className = Math.abs(hour.temperature_error) <= 1 ? "good" : (Math.abs(hour.temperature_error) > 3 ? "error" : "");
+          }
+          cell(row, hour.predicted_precipitation_mm);
+          cell(row, hour.measured_precipitation_mm);
+          cell(row, fmt(hour.precipitation_error));
+          cell(row, hour.predicted_condition);
+          cell(row, hour.measured_condition);
+          cell(row, hour.lead_hours);
+          body.appendChild(row);
+        });
+        $("historySummary").textContent = history.samples
+          ? `Temperature: mean absolute error ${fmt(history.temperature_mae, 2)} K, ` +
+            `bias ${fmt(history.temperature_bias, 2)} K over ${history.samples} hour(s)` +
+            (history.precipitation_mae !== null ? `; precipitation: mean absolute error ${fmt(history.precipitation_mae, 2)} mm` : "") +
+            `. Measured by: ${history.sources.join(", ") || "–"}.`
+          : "No archived prediction for the last 24 hours yet – predictions are archived on every forecast refresh.";
+      }
+
+      async function loadHistory() {
+        const locationId = $("location").value;
+        if (!locationId) return;
+        try {
+          $("historySummary").textContent = "Loading…";
+          renderHistory(await api(`/api/history/${encodeURIComponent(locationId)}`));
+        } catch (error) {
+          $("historySummary").textContent = error.message;
+        }
+      }
+
+      $("historySection").addEventListener("toggle", () => {
+        if ($("historySection").open) loadHistory();
+      });
+
+      async function locationChanged() {
+        if (observationSources) renderObservationSources(observationSources);
+        if (!editingMeasurement) $("measurementLocation").value = $("location").value;
+        if (!editingEsMeasurement) $("esMeasurementLocation").value = $("location").value;
+        await load(false);
+      }
 
       $("addSource").addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -511,28 +1117,33 @@
         setStatus(refresh ? "Querying all providers…" : "Loading…");
         try {
           const forecast = refresh
-            ? await api(`/api/forecast/${locationId}/refresh`, { method: "POST" })
-            : await api(`/api/forecast/${locationId}`);
+            ? await api(`/api/forecast/${encodeURIComponent(locationId)}/refresh`, { method: "POST" })
+            : await api(`/api/forecast/${encodeURIComponent(locationId)}`);
           renderRanking(locationId, forecast.ranking);
           renderSeason(forecast.season);
           renderForecast(forecast.days);
           renderShortForecast(forecast.hourly, "hourlyForecast");
           renderShortForecast(forecast.four_hourly, "fourHourlyForecast");
           setStatus(`Updated ${new Date(forecast.generated_at).toLocaleString()}`);
+          if ($("historySection").open) loadHistory();
         } catch (error) { setStatus(error.message); }
       }
 
       async function init() {
+        resetInstanceForm();
+        resetMeasurementForm();
+        resetEsInstanceForm();
+        resetEsMeasurementForm();
         try {
-          const locations = await api("/api/locations");
-          const select = $("location");
-          select.textContent = "";
-          locations.forEach((location) => {
-            const option = document.createElement("option");
-            option.value = location.id;
-            option.textContent = location.name;
-            select.appendChild(option);
-          });
+          const items = await api("/api/locations");
+          locations = items;
+          const options = items.map((location) => [location.id, location.name]);
+          fillSelect($("location"), options);
+          fillSelect($("measurementLocation"), options);
+          fillSelect($("esMeasurementLocation"), options);
+          $("measurementLocation").value = $("location").value;
+          $("esMeasurementLocation").value = $("location").value;
+          renderLocations();
           await loadSources();
           await loadObservationSources();
           await load();
@@ -541,14 +1152,11 @@
 
       $("reload").addEventListener("click", () => load(false));
       $("refresh").addEventListener("click", () => load(true));
-      $("location").addEventListener("change", () => {
-        load(false);
-        loadObservationSources();
-      });
+      $("location").addEventListener("change", locationChanged);
       $("verify").addEventListener("click", async () => {
         try {
           setStatus("Asking Azure AI Foundry…");
-          const result = await api(`/api/verify/${$("location").value}`, { method: "POST" });
+          const result = await api(`/api/verify/${encodeURIComponent($("location").value)}`, { method: "POST" });
           setStatus(result.summary);
         } catch (error) { setStatus(error.message); }
       });

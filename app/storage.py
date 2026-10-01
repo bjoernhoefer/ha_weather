@@ -6,11 +6,27 @@ import json
 import os
 import sqlite3
 import threading
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .clock import today_utc
-from .models import CustomSource, Observation, ProviderForecast, ProviderOverride
+from .clock import now_utc, today_utc
+from .config import (
+    ElasticsearchInstance,
+    ElasticsearchMeasurement,
+    HomeAssistantInstance,
+    Location,
+    Measurement,
+)
+from .models import (
+    AggregatedHour,
+    CustomSource,
+    Observation,
+    ProviderForecast,
+    ProviderOverride,
+)
+
+#: hourly consensus predictions are only kept for the history view
+HOURLY_PREDICTION_RETENTION_DAYS = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS forecasts (
@@ -61,6 +77,56 @@ CREATE TABLE IF NOT EXISTS custom_sources (
 CREATE TABLE IF NOT EXISTS observation_source_settings (
     source TEXT PRIMARY KEY,
     config TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ha_instances (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    url TEXT,
+    token TEXT
+);
+CREATE TABLE IF NOT EXISTS measurements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instance_id TEXT NOT NULL,
+    location_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'outdoor',
+    name TEXT NOT NULL DEFAULT '',
+    UNIQUE (instance_id, location_id, entity_id, scope)
+);
+CREATE TABLE IF NOT EXISTS es_instances (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    url TEXT,
+    api_key TEXT,
+    "index" TEXT,
+    location_field TEXT NOT NULL DEFAULT 'location_id'
+);
+CREATE TABLE IF NOT EXISTS es_measurements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instance_id TEXT NOT NULL,
+    location_id TEXT NOT NULL,
+    field TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'outdoor',
+    name TEXT NOT NULL DEFAULT '',
+    UNIQUE (instance_id, location_id, field, scope)
+);
+CREATE TABLE IF NOT EXISTS locations (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    timezone TEXT NOT NULL DEFAULT 'UTC',
+    aemet_municipality TEXT
+);
+CREATE TABLE IF NOT EXISTS hourly_predictions (
+    location_id TEXT NOT NULL,
+    target_time TEXT NOT NULL,
+    issued_at TEXT NOT NULL,
+    temperature REAL,
+    precipitation_mm REAL,
+    wind_speed REAL,
+    condition TEXT,
+    PRIMARY KEY (location_id, target_time)
 );
 """
 
@@ -469,6 +535,366 @@ class Storage:
         return json.loads(row["config"]) if row else None
 
     # ------------------------------------------------------------------
+    # Home Assistant instances and measurements (web UI)
+    # ------------------------------------------------------------------
+    def ha_instances(self) -> List[HomeAssistantInstance]:
+        with self._lock:
+            rows = list(self._connection.execute("SELECT * FROM ha_instances ORDER BY name, id"))
+        return [
+            HomeAssistantInstance(
+                id=row["id"], name=row["name"], url=row["url"], token=row["token"]
+            )
+            for row in rows
+        ]
+
+    def save_ha_instance(self, instance: HomeAssistantInstance) -> None:
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO ha_instances (id, name, url, token) VALUES (?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET name=excluded.name,
+                    url=excluded.url, token=excluded.token
+                """,
+                (instance.id, instance.name, instance.url, instance.token),
+            )
+            self._connection.commit()
+
+    def delete_ha_instance(self, instance_id: str) -> bool:
+        """Remove an instance together with all of its measurements."""
+        with self._lock:
+            cursor = self._connection.execute(
+                "DELETE FROM ha_instances WHERE id = ?", (instance_id,)
+            )
+            self._connection.execute(
+                "DELETE FROM measurements WHERE instance_id = ?", (instance_id,)
+            )
+            self._connection.commit()
+        return cursor.rowcount > 0
+
+    def measurements(self) -> List[Measurement]:
+        with self._lock:
+            rows = list(
+                self._connection.execute(
+                    "SELECT * FROM measurements ORDER BY location_id, scope, entity_id, id"
+                )
+            )
+        return [
+            Measurement(
+                id=row["id"],
+                instance_id=row["instance_id"],
+                location_id=row["location_id"],
+                entity_id=row["entity_id"],
+                scope=row["scope"],
+                name=row["name"],
+            )
+            for row in rows
+        ]
+
+    def add_measurement(self, measurement: Measurement) -> int:
+        """Insert a measurement, raises :class:`sqlite3.IntegrityError` for duplicates."""
+        with self._lock:
+            cursor = self._connection.execute(
+                """
+                INSERT INTO measurements (instance_id, location_id, entity_id, scope, name)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    measurement.instance_id,
+                    measurement.location_id,
+                    measurement.entity_id,
+                    measurement.scope,
+                    measurement.name,
+                ),
+            )
+            self._connection.commit()
+        return int(cursor.lastrowid)
+
+    def update_measurement(self, measurement_id: int, measurement: Measurement) -> bool:
+        """Update a measurement, raises :class:`sqlite3.IntegrityError` for duplicates."""
+        with self._lock:
+            cursor = self._connection.execute(
+                """
+                UPDATE measurements SET instance_id = ?, location_id = ?,
+                    entity_id = ?, scope = ?, name = ?
+                WHERE id = ?
+                """,
+                (
+                    measurement.instance_id,
+                    measurement.location_id,
+                    measurement.entity_id,
+                    measurement.scope,
+                    measurement.name,
+                    measurement_id,
+                ),
+            )
+            self._connection.commit()
+        return cursor.rowcount > 0
+
+    def delete_measurement(self, measurement_id: int) -> bool:
+        with self._lock:
+            cursor = self._connection.execute(
+                "DELETE FROM measurements WHERE id = ?", (measurement_id,)
+            )
+            self._connection.commit()
+        return cursor.rowcount > 0
+
+    # ------------------------------------------------------------------
+    # Elasticsearch instances and field mappings (web UI)
+    # ------------------------------------------------------------------
+    def es_instances(self) -> List[ElasticsearchInstance]:
+        with self._lock:
+            rows = list(self._connection.execute("SELECT * FROM es_instances ORDER BY name, id"))
+        return [
+            ElasticsearchInstance(
+                id=row["id"],
+                name=row["name"],
+                url=row["url"],
+                api_key=row["api_key"],
+                index=row["index"],
+                location_field=row["location_field"],
+            )
+            for row in rows
+        ]
+
+    def save_es_instance(self, instance: ElasticsearchInstance) -> None:
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO es_instances (id, name, url, api_key, "index", location_field)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET name=excluded.name, url=excluded.url,
+                    api_key=excluded.api_key, "index"=excluded."index",
+                    location_field=excluded.location_field
+                """,
+                (
+                    instance.id,
+                    instance.name,
+                    instance.url,
+                    instance.api_key,
+                    instance.index,
+                    instance.location_field,
+                ),
+            )
+            self._connection.commit()
+
+    def delete_es_instance(self, instance_id: str) -> bool:
+        """Remove an instance together with all of its field mappings."""
+        with self._lock:
+            cursor = self._connection.execute(
+                "DELETE FROM es_instances WHERE id = ?", (instance_id,)
+            )
+            self._connection.execute(
+                "DELETE FROM es_measurements WHERE instance_id = ?", (instance_id,)
+            )
+            self._connection.commit()
+        return cursor.rowcount > 0
+
+    def es_measurements(self) -> List[ElasticsearchMeasurement]:
+        with self._lock:
+            rows = list(
+                self._connection.execute(
+                    "SELECT * FROM es_measurements ORDER BY location_id, scope, field, id"
+                )
+            )
+        return [
+            ElasticsearchMeasurement(
+                id=row["id"],
+                instance_id=row["instance_id"],
+                location_id=row["location_id"],
+                field=row["field"],
+                scope=row["scope"],
+                name=row["name"],
+            )
+            for row in rows
+        ]
+
+    def add_es_measurement(self, measurement: ElasticsearchMeasurement) -> int:
+        """Insert a field mapping, raises :class:`sqlite3.IntegrityError` for duplicates."""
+        with self._lock:
+            cursor = self._connection.execute(
+                """
+                INSERT INTO es_measurements (instance_id, location_id, field, scope, name)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    measurement.instance_id,
+                    measurement.location_id,
+                    measurement.field,
+                    measurement.scope,
+                    measurement.name,
+                ),
+            )
+            self._connection.commit()
+        return int(cursor.lastrowid)
+
+    def update_es_measurement(
+        self, measurement_id: int, measurement: ElasticsearchMeasurement
+    ) -> bool:
+        """Update a field mapping, raises :class:`sqlite3.IntegrityError` for duplicates."""
+        with self._lock:
+            cursor = self._connection.execute(
+                """
+                UPDATE es_measurements SET instance_id = ?, location_id = ?,
+                    field = ?, scope = ?, name = ?
+                WHERE id = ?
+                """,
+                (
+                    measurement.instance_id,
+                    measurement.location_id,
+                    measurement.field,
+                    measurement.scope,
+                    measurement.name,
+                    measurement_id,
+                ),
+            )
+            self._connection.commit()
+        return cursor.rowcount > 0
+
+    def delete_es_measurement(self, measurement_id: int) -> bool:
+        with self._lock:
+            cursor = self._connection.execute(
+                "DELETE FROM es_measurements WHERE id = ?", (measurement_id,)
+            )
+            self._connection.commit()
+        return cursor.rowcount > 0
+
+    # ------------------------------------------------------------------
+    # locations added in the web UI
+    # ------------------------------------------------------------------
+    def locations(self) -> List[Location]:
+        with self._lock:
+            rows = list(self._connection.execute("SELECT * FROM locations ORDER BY name, id"))
+        return [
+            Location(
+                id=row["id"],
+                name=row["name"],
+                latitude=row["latitude"],
+                longitude=row["longitude"],
+                timezone=row["timezone"],
+                aemet_municipality=row["aemet_municipality"],
+            )
+            for row in rows
+        ]
+
+    def save_location(self, location: Location) -> None:
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO locations (id, name, latitude, longitude, timezone,
+                    aemet_municipality)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET name=excluded.name,
+                    latitude=excluded.latitude, longitude=excluded.longitude,
+                    timezone=excluded.timezone,
+                    aemet_municipality=excluded.aemet_municipality
+                """,
+                (
+                    location.id,
+                    location.name,
+                    location.latitude,
+                    location.longitude,
+                    location.timezone,
+                    location.aemet_municipality,
+                ),
+            )
+            self._connection.commit()
+
+    def delete_location(self, location_id: str) -> bool:
+        """Remove a UI location together with its measurements and archived
+        data, so a later location with the same id starts from scratch."""
+        with self._lock:
+            cursor = self._connection.execute(
+                "DELETE FROM locations WHERE id = ?", (location_id,)
+            )
+            deleted = cursor.rowcount > 0
+            if deleted:
+                for table in (
+                    "measurements",
+                    "es_measurements",
+                    "hourly_predictions",
+                    "forecasts",
+                    "observations",
+                    "overrides",
+                ):
+                    self._connection.execute(
+                        f"DELETE FROM {table} WHERE location_id = ?", (location_id,)
+                    )
+            self._connection.commit()
+        return deleted
+
+    # ------------------------------------------------------------------
+    # hourly consensus archive (history of the last 24 hours)
+    # ------------------------------------------------------------------
+    def save_hourly_predictions(
+        self, location_id: str, issued_at: datetime, hours: List[AggregatedHour]
+    ) -> int:
+        """Archive future hourly consensus values.
+
+        Only the *first* prediction of an hour is kept, so the history shows
+        how good the forecast was with the longest available lead time
+        instead of a nowcast made minutes before the hour.
+        """
+        issued = _as_utc(issued_at)
+        rows = [
+            (
+                location_id,
+                _as_utc(hour.target_time).isoformat(),
+                issued.isoformat(),
+                hour.temperature,
+                hour.precipitation_mm,
+                hour.wind_speed,
+                hour.condition,
+            )
+            for hour in hours
+            if _as_utc(hour.target_time) > issued
+        ]
+        cutoff = (now_utc() - timedelta(days=HOURLY_PREDICTION_RETENTION_DAYS)).isoformat()
+        with self._lock:
+            self._connection.executemany(
+                """
+                INSERT INTO hourly_predictions (location_id, target_time, issued_at,
+                    temperature, precipitation_mm, wind_speed, condition)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (location_id, target_time) DO NOTHING
+                """,
+                rows,
+            )
+            self._connection.execute(
+                "DELETE FROM hourly_predictions WHERE target_time < ?", (cutoff,)
+            )
+            self._connection.commit()
+        return len(rows)
+
+    def hourly_predictions(
+        self, location_id: str, start: datetime, end: datetime
+    ) -> Dict[datetime, Tuple[datetime, AggregatedHour]]:
+        """Archived predictions in ``[start, end)``: target time -> (issued_at, hour)."""
+        with self._lock:
+            rows = list(
+                self._connection.execute(
+                    """
+                    SELECT * FROM hourly_predictions
+                    WHERE location_id = ? AND target_time >= ? AND target_time < ?
+                    """,
+                    (location_id, _as_utc(start).isoformat(), _as_utc(end).isoformat()),
+                )
+            )
+        result: Dict[datetime, Tuple[datetime, AggregatedHour]] = {}
+        for row in rows:
+            target_time = datetime.fromisoformat(row["target_time"])
+            result[target_time] = (
+                datetime.fromisoformat(row["issued_at"]),
+                AggregatedHour(
+                    target_time=target_time,
+                    temperature=row["temperature"],
+                    precipitation_mm=row["precipitation_mm"],
+                    wind_speed=row["wind_speed"],
+                    condition=row["condition"],
+                ),
+            )
+        return result
+
+    # ------------------------------------------------------------------
     def purge_older_than(self, days: int) -> int:
         """Housekeeping: drop forecasts/observations older than ``days``."""
         cutoff = (today_utc() - timedelta(days=days)).isoformat()
@@ -493,6 +919,13 @@ def forecast_rows_by_provider(
             (date.fromisoformat(row["target_date"]), row)
         )
     return grouped
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Naive timestamps are treated as UTC."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _merge_sources(existing: Optional[str], new: Optional[str]) -> Optional[str]:

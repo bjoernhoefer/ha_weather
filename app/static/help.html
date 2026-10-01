@@ -25,12 +25,16 @@
       <section>
         <h2>What can I do here?</h2>
         <ul>
-          <li><strong>Location and forecast:</strong> select a location to see the weighted consensus forecast by hour, four-hour interval and day. Reload uses the cached result; Refresh forecast queries the sources again.</li>
-          <li><strong>Top / Low providers:</strong> compare weather sources by measured accuracy. Set a manual rank or disable a provider for the selected location; Reset removes that override.</li>
+          <li><strong>Foldable sections:</strong> click a section title to open or close it. Only <em>Forecast → Next 24 hours</em> is open by default.</li>
+          <li><strong>Location and forecast:</strong> select a location to see the weighted consensus forecast for the next 24 hours, the next 48 hours (four-hour intervals) and days 3&ndash;7. Reload uses the cached result; Refresh forecast queries the sources again.</li>
+          <li><strong>History, last 24 hours:</strong> compares what was predicted for each past hour with the measured value (Home Assistant outdoor sensors, otherwise Open-Meteo) and shows the mean absolute error and bias.</li>
+          <li><strong>Providers (Top / Low):</strong> compare weather sources by measured accuracy. Set a manual rank or disable a provider for the selected location; Reset removes that override.</li>
           <li><strong>Source control:</strong> enable or disable sources for all locations, save API keys for sources that need them, or add a keyless Open-Meteo model.</li>
-          <li><strong>Season and garden indicators:</strong> view seasonal and upcoming weather changes alongside evapotranspiration, water balance, sunshine, radiation and soil moisture.</li>
+          <li><strong>Seasons and garden indicators:</strong> view seasonal and upcoming weather changes alongside evapotranspiration, water balance, sunshine, radiation and soil moisture.</li>
+          <li><strong>Real world measurements:</strong> add any number of Home Assistant instances (URL + long-lived token), then add measurements that couple a sensor entity of an instance with a location and indoor/outdoor scope. Edit or delete them in the list. Elasticsearch works the same way: add any number of instances (URL, API key, index, location field), then add fields that couple a temperature field of an instance with a location and scope. Deleting an instance also deletes its measurements or fields.</li>
+          <li><strong>General settings:</strong> add a location by name (optionally with latitude/longitude for better accuracy) or delete locations added here, and enter the API key.</li>
           <li><strong>Verify with Azure AI Foundry:</strong> request an additional assessment when an Azure AI Foundry deployment is configured.</li>
-          <li><strong>Public mode:</strong> enter your API key in the field on the forecast page before loading data. The key is stored in this browser.</li>
+          <li><strong>Public mode:</strong> enter your API key under <em>General settings</em>; it opens automatically when the key is missing or wrong. The key is stored in this browser.</li>
         </ul>
       </section>
 

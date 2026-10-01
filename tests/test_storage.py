@@ -3,8 +3,8 @@ from __future__ import annotations
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
-from app.clock import today_utc
-from app.models import CustomSource, DailyForecast, Observation, ProviderForecast, ProviderOverride
+from app.clock import now_utc, today_utc
+from app.models import AggregatedHour, CustomSource, DailyForecast, Observation, ProviderForecast, ProviderOverride
 from app.observations import observations_from_payload
 from app.storage import Storage
 
@@ -246,3 +246,75 @@ def test_source_control_persistence(storage):
     assert storage.custom_sources() == []
     assert storage.disabled_sources() == set()
     assert storage.delete_custom_source("icon_d2") is False
+
+
+def test_hourly_predictions_keep_the_first_forecast_of_an_hour(storage):
+    target = now_utc().replace(minute=0, second=0, microsecond=0) + timedelta(hours=5)
+    first = target - timedelta(hours=20)
+    storage.save_hourly_predictions(
+        "vienna", first, [AggregatedHour(target_time=target, temperature=10.0)]
+    )
+    storage.save_hourly_predictions(
+        "vienna",
+        target - timedelta(hours=1),
+        [
+            AggregatedHour(target_time=target, temperature=12.0),
+            # already in the past when issued: never archived
+            AggregatedHour(target_time=target - timedelta(hours=2), temperature=1.0),
+        ],
+    )
+    stored = storage.hourly_predictions("vienna", target - timedelta(hours=3), target + timedelta(hours=1))
+    assert list(stored) == [target]
+    issued_at, hour = stored[target]
+    assert issued_at == first
+    assert hour.temperature == 10.0
+
+
+def test_ui_locations_and_measurements_round_trip(storage):
+    from app.config import HomeAssistantInstance, Location, Measurement
+
+    storage.save_location(Location(id="graz", name="Graz", latitude=47.07, longitude=15.45))
+    storage.save_ha_instance(HomeAssistantInstance(id="home", name="Home", url="http://h", token="t"))
+    measurement_id = storage.add_measurement(
+        Measurement(instance_id="home", location_id="graz", entity_id="sensor.a")
+    )
+    assert [item.id for item in storage.locations()] == ["graz"]
+    assert storage.measurements()[0].id == measurement_id
+    now = now_utc().replace(minute=0, second=0, microsecond=0)
+    storage.save_hourly_predictions(
+        "graz", now, [AggregatedHour(target_time=now + timedelta(hours=1), temperature=5.0)]
+    )
+    assert storage.delete_location("graz") is True
+    assert storage.measurements() == []
+    assert storage.hourly_predictions("graz", now, now + timedelta(hours=2)) == {}
+    storage.add_measurement(Measurement(instance_id="home", location_id="graz", entity_id="sensor.a"))
+    assert storage.delete_ha_instance("home") is True
+    assert storage.measurements() == []
+
+
+def test_elasticsearch_instances_and_fields_round_trip(storage):
+    import sqlite3
+
+    import pytest
+
+    from app.config import ElasticsearchInstance, ElasticsearchMeasurement, Location
+
+    storage.save_location(Location(id="graz", name="Graz", latitude=47.07, longitude=15.45))
+    storage.save_es_instance(
+        ElasticsearchInstance(
+            id="cloud", name="Cloud", url="https://c", api_key="k", index="weather", location_field="site"
+        )
+    )
+    (instance,) = storage.es_instances()
+    assert (instance.index, instance.location_field, instance.api_key) == ("weather", "site", "k")
+    field = ElasticsearchMeasurement(instance_id="cloud", location_id="graz", field="outdoor_temp")
+    measurement_id = storage.add_es_measurement(field)
+    with pytest.raises(sqlite3.IntegrityError):
+        storage.add_es_measurement(field)
+    assert storage.update_es_measurement(measurement_id, field.model_copy(update={"scope": "indoor"}))
+    assert storage.es_measurements()[0].scope == "indoor"
+    assert storage.delete_location("graz") is True
+    assert storage.es_measurements() == []
+    storage.add_es_measurement(field)
+    assert storage.delete_es_instance("cloud") is True
+    assert storage.es_instances() == [] and storage.es_measurements() == []

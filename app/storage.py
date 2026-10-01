@@ -189,14 +189,18 @@ class Storage:
         value (e.g. Open-Meteo's precipitation) is not wiped out by another
         source writing the same ``(location_id, target_date, scope)`` row
         without that field (e.g. Home Assistant/Elasticsearch temperatures).
-        ``source`` is combined (e.g. ``"home_assistant+open_meteo"``) so it
-        keeps reflecting every source that actually contributed a field,
-        instead of only the last writer. Existing ``source`` values are
-        looked up per location with a bounded ``target_date`` range (rather
-        than binding one parameter set per row) to avoid hitting SQLite's
-        bound-parameter limit on large batches, and the in-memory map is
-        updated as each row is merged so multiple rows for the same key
-        within one batch (e.g. Open-Meteo and Home Assistant outdoor rows
+        When two sources both provide a non-null value for the same field,
+        the last one written wins - ``observations`` is expected in
+        ``Settings.observation_sources`` order (see ``fetch_observations``),
+        so later sources take precedence over earlier ones for conflicting
+        fields. ``source`` is combined (e.g. ``"home_assistant+open_meteo"``)
+        so it keeps reflecting every source that actually contributed a
+        field, instead of only the last writer. Existing ``source`` values
+        are looked up per location with a bounded ``target_date`` range
+        (rather than binding one parameter set per row) to avoid hitting
+        SQLite's bound-parameter limit on large batches, and the in-memory
+        map is updated as each row is merged so multiple rows for the same
+        key within one batch (e.g. Open-Meteo and Home Assistant outdoor rows
         for the same day) are merged with each other too, not just with
         what was already stored.
         """

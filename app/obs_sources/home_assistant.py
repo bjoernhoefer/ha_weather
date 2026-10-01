@@ -56,16 +56,23 @@ def observations_from_history(
 ) -> List[Observation]:
     """Aggregate a Home Assistant ``history/period`` response per local day.
 
-    ``minimal_response`` keeps the first entry of every entity's state at the
-    window start (which may predate it) and drops ``last_updated`` on the
-    following ones, so days before ``start`` are discarded (``last_changed``
-    is preferred over ``last_updated``). ``end`` (exclusive) drops the still
-    changing, incomplete current local day, mirroring the Open-Meteo source.
+    Home Assistant only records state *changes*, so a value is active for
+    every day between its ``last_changed`` timestamp and the next change -
+    including days where the sensor doesn't change at all. When ``start`` is
+    given (the normal case, called from :meth:`HomeAssistantObservationSource.fetch`)
+    the last known value of each series is therefore carried forward into
+    every subsequent local day it spans, and the ``minimal_response`` entry
+    for the window start (the entity's state *at* ``start``, which may
+    predate it) is clamped to ``start`` instead of being discarded, so the
+    value active entering the window is still counted for its first day.
+    ``end`` (exclusive) drops the still changing, incomplete current local
+    day, mirroring the Open-Meteo source.
     """
     tzinfo = _resolve_timezone(timezone_name)
-
     by_day: Dict[str, List[float]] = {}
+
     for series in history:
+        events: List[tuple[datetime, float]] = []
         for entry in series:
             value = _as_float(entry.get("state"))
             stamp = entry.get("last_changed") or entry.get("last_updated")
@@ -75,12 +82,39 @@ def observations_from_history(
                 when = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
             except ValueError:
                 continue
-            local_date = when.astimezone(tzinfo).date()
-            if start is not None and local_date < start:
-                continue
-            if end is not None and local_date >= end:
-                continue
-            by_day.setdefault(local_date.isoformat(), []).append(value)
+            events.append((when, value))
+        if not events:
+            continue
+        events.sort(key=lambda item: item[0])
+
+        if start is None:
+            # no known window: fall back to simple per-event-day grouping
+            for when, value in events:
+                local_date = when.astimezone(tzinfo).date()
+                if end is not None and local_date >= end:
+                    continue
+                by_day.setdefault(local_date.isoformat(), []).append(value)
+            continue
+
+        window_start = datetime.combine(start, datetime.min.time(), tzinfo=tzinfo)
+        if events[0][0] < window_start:
+            events[0] = (window_start, events[0][1])
+
+        last_value: Optional[float] = None
+        event_index = 0
+        last_day = (end - timedelta(days=1)) if end is not None else events[-1][0].astimezone(tzinfo).date()
+        day = start
+        while day <= last_day:
+            day_values: List[float] = []
+            while event_index < len(events) and events[event_index][0].astimezone(tzinfo).date() == day:
+                last_value = events[event_index][1]
+                day_values.append(last_value)
+                event_index += 1
+            if not day_values and last_value is not None:
+                day_values.append(last_value)
+            if day_values:
+                by_day.setdefault(day.isoformat(), []).extend(day_values)
+            day += timedelta(days=1)
 
     observations: List[Observation] = []
     for target_date in sorted(by_day):

@@ -107,6 +107,53 @@ def test_home_assistant_history_drops_the_still_running_local_day():
     assert [item.target_date for item in observations] == [date(2024, 1, 1)]
 
 
+def test_home_assistant_history_carries_the_last_value_into_unchanged_days():
+    # the sensor only reports once on day 1 and never changes again; within
+    # the requested window every later day must still get an observation
+    # carrying that last known value forward
+    history = [
+        [
+            {"state": "5.0", "last_changed": "2024-01-01T06:00:00+00:00"},
+        ]
+    ]
+    observations = observations_from_history(
+        history,
+        "vienna",
+        "outdoor",
+        start=date(2024, 1, 1),
+        end=date(2024, 1, 4),
+    )
+    assert [item.target_date for item in observations] == [
+        date(2024, 1, 1),
+        date(2024, 1, 2),
+        date(2024, 1, 3),
+    ]
+    for observation in observations:
+        assert observation.temperature_min == 5.0
+        assert observation.temperature_max == 5.0
+
+
+def test_home_assistant_history_clamps_the_window_start_entry_instead_of_dropping_it():
+    # minimal_response's first entry predates `start`: it is the state active
+    # *at* the window start and must still count for that first day, instead
+    # of being discarded
+    history = [
+        [
+            {"state": "-4.0", "last_changed": "2023-12-20T10:00:00+00:00"},
+        ]
+    ]
+    observations = observations_from_history(
+        history,
+        "vienna",
+        "outdoor",
+        start=date(2024, 1, 1),
+        end=date(2024, 1, 2),
+    )
+    assert [item.target_date for item in observations] == [date(2024, 1, 1)]
+    assert observations[0].temperature_min == -4.0
+    assert observations[0].temperature_max == -4.0
+
+
 def test_elasticsearch_source_requires_a_field_mapping():
     settings = Settings(
         database_path=":memory:",

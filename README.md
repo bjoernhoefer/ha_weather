@@ -158,6 +158,15 @@ Two additional, pluggable sources can be enabled through
   location through `HAW_ELASTICSEARCH_LOCATION_FIELD` (a term filter, default
   `location_id`) and must have a `@timestamp` field.
 
+When more than one source reports the same day/scope, temperature and
+precipitation fields are merged (a source's `None`/missing value never
+overwrites a value already saved by another source), but when two sources
+both report a value for the same field, the **last** source fetched wins –
+sources are queried in the order listed in `HAW_OBSERVATION_SOURCES`, so
+later entries take precedence over earlier ones for conflicting fields.
+`source` itself always reflects every contributing source (e.g.
+`home_assistant+open_meteo`).
+
 Indoor and outdoor readings are tracked separately (`Observation.scope`):
 only **outdoor** observations are used to score the weather providers, since
 indoor sensors are not comparable with an outdoor weather forecast. Indoor

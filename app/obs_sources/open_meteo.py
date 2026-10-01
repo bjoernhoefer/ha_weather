@@ -7,15 +7,19 @@ and works without any registration. This is the default/legacy source.
 
 from __future__ import annotations
 
-from datetime import date
-from typing import List
+from datetime import date, datetime, timezone
+from typing import Dict, List
 
 import httpx
 
 from ..clock import today_utc
 from ..config import Location, Settings
-from ..models import Observation
-from ..providers.open_meteo import parse_open_meteo_daily
+from ..models import HourlyForecast, Observation
+from ..providers.open_meteo import (
+    HOURLY_VARIABLES,
+    parse_open_meteo_daily,
+    parse_open_meteo_hourly,
+)
 from .base import ObservationSource, register
 
 OBSERVATION_URL = "https://api.open-meteo.com/v1/forecast"
@@ -70,3 +74,27 @@ class OpenMeteoObservationSource(ObservationSource):
         )
         response.raise_for_status()
         return observations_from_payload(response.json(), location.id, today_utc())
+
+
+async def fetch_hourly_observations(
+    client: httpx.AsyncClient, location: Location, start: datetime, end: datetime
+) -> Dict[datetime, HourlyForecast]:
+    """Hourly values of the past day in ``[start, end)``, keyed by UTC hour."""
+    response = await client.get(
+        OBSERVATION_URL,
+        params={
+            "latitude": location.latitude,
+            "longitude": location.longitude,
+            "hourly": HOURLY_VARIABLES,
+            "timezone": "UTC",
+            "past_days": 1,
+            "forecast_days": 1,
+        },
+    )
+    response.raise_for_status()
+    result: Dict[datetime, HourlyForecast] = {}
+    for hour in parse_open_meteo_hourly(response.json(), "UTC"):
+        target_time = hour.target_time.astimezone(timezone.utc)
+        if start <= target_time < end:
+            result[target_time] = hour
+    return result

@@ -246,3 +246,44 @@ def test_source_control_persistence(storage):
     assert storage.custom_sources() == []
     assert storage.disabled_sources() == set()
     assert storage.delete_custom_source("icon_d2") is False
+
+
+def test_hourly_predictions_keep_the_first_forecast_of_an_hour(storage):
+    from app.models import AggregatedHour
+
+    target = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0) + timedelta(hours=5)
+    first = target - timedelta(hours=20)
+    storage.save_hourly_predictions(
+        "vienna", first, [AggregatedHour(target_time=target, temperature=10.0)]
+    )
+    storage.save_hourly_predictions(
+        "vienna",
+        target - timedelta(hours=1),
+        [
+            AggregatedHour(target_time=target, temperature=12.0),
+            # already in the past when issued: never archived
+            AggregatedHour(target_time=target - timedelta(hours=2), temperature=1.0),
+        ],
+    )
+    stored = storage.hourly_predictions("vienna", target - timedelta(hours=3), target + timedelta(hours=1))
+    assert list(stored) == [target]
+    issued_at, hour = stored[target]
+    assert issued_at == first
+    assert hour.temperature == 10.0
+
+
+def test_ui_locations_and_measurements_round_trip(storage):
+    from app.config import HomeAssistantInstance, Location, Measurement
+
+    storage.save_location(Location(id="graz", name="Graz", latitude=47.07, longitude=15.45))
+    storage.save_ha_instance(HomeAssistantInstance(id="home", name="Home", url="http://h", token="t"))
+    measurement_id = storage.add_measurement(
+        Measurement(instance_id="home", location_id="graz", entity_id="sensor.a")
+    )
+    assert [item.id for item in storage.locations()] == ["graz"]
+    assert storage.measurements()[0].id == measurement_id
+    assert storage.delete_location("graz") is True
+    assert storage.measurements() == []
+    storage.add_measurement(Measurement(instance_id="home", location_id="graz", entity_id="sensor.a"))
+    assert storage.delete_ha_instance("home") is True
+    assert storage.measurements() == []

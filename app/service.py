@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, timedelta
+import re
+import sqlite3
+from collections import Counter
+from datetime import date, datetime, timedelta
 from typing import Callable, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -13,14 +17,30 @@ from .agro import AgroDay, apply_agro, fetch_agro, watering_state
 from .aggregation import aggregate, aggregate_hourly
 from .azure_foundry import AzureFoundryVerifier
 from .clock import now_utc, today_utc
-from .config import DEFAULT_ELASTICSEARCH_LOCATION_FIELD, Location, Settings
+from .config import (
+    DEFAULT_ELASTICSEARCH_LOCATION_FIELD,
+    ENVIRONMENT_INSTANCE_ID,
+    HomeAssistantInstance,
+    Location,
+    Measurement,
+    Settings,
+)
+from .geocoding import geocode, lookup_timezone
 from .models import (
+    MAX_ENTITIES_PER_LOCATION,
     CustomSource,
     ElasticsearchSettingsIn,
     ElasticsearchSettingsInfo,
-    HomeAssistantSettingsIn,
+    ForecastHistory,
+    HistoryHour,
+    HomeAssistantInstanceIn,
+    HomeAssistantInstanceInfo,
     HomeAssistantSettingsInfo,
     LocationForecast,
+    LocationIn,
+    LocationInfo,
+    MeasurementIn,
+    MeasurementInfo,
     ObservationSourcesInfo,
     ProviderForecast,
     ProviderOverride,
@@ -32,6 +52,12 @@ from .models import (
 )
 from .observations import fetch_observations
 from .obs_sources import ObservationSource, registered_sources
+from .obs_sources.home_assistant import (
+    HomeAssistantObservationSource,
+    effective_instances,
+    effective_measurements,
+)
+from .obs_sources.open_meteo import fetch_hourly_observations
 from .providers import WeatherProvider, build_providers, registered_providers
 from .providers.open_meteo import OpenMeteoModelProvider
 from .scoring import build_ranking, compute_scores, provider_weights
@@ -59,6 +85,35 @@ class ApiKeyNotSupportedError(ValueError):
     """Raised when an API key is set for a source that doesn't use one."""
 
 
+class ConflictError(ValueError):
+    """Raised when a change clashes with existing or read-only configuration."""
+
+
+class UnknownInstanceError(LookupError):
+    """Raised when a Home Assistant instance id is not known."""
+
+
+class UnknownMeasurementError(LookupError):
+    """Raised when a measurement id is not known."""
+
+
+class LocationLookupError(ValueError):
+    """Raised when a new location cannot be resolved to coordinates."""
+
+
+def _slug(value: str, fallback: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")[:32]
+    return slug or fallback
+
+
+def _unique_id(base: str, taken: set) -> str:
+    candidate, index = base, 2
+    while candidate in taken:
+        candidate = f"{base}_{index}"
+        index += 1
+    return candidate
+
+
 class WeatherService:
     """Everything the API layer needs, free of HTTP concerns."""
 
@@ -74,6 +129,7 @@ class WeatherService:
         self.providers: List[WeatherProvider] = []
         self._client_factory = client_factory or self._default_client
         self._cache: Dict[str, LocationForecast] = {}
+        self._migrate_legacy_home_assistant()
         self.reload_providers()
 
     def _default_client(self) -> httpx.AsyncClient:
@@ -113,16 +169,25 @@ class WeatherService:
         applies UI-entered API keys: UI values win over environment ones.
         """
         update: Dict[str, object] = {}
-        ha_config = self.storage.observation_source_settings("home_assistant")
-        if ha_config:
-            if "url" in ha_config:
-                update["home_assistant_url"] = ha_config["url"]
-            if ha_config.get("token"):
-                update["home_assistant_token"] = ha_config["token"]
-            if "indoor_entities" in ha_config:
-                update["home_assistant_indoor_entities"] = ha_config["indoor_entities"]
-            if "outdoor_entities" in ha_config:
-                update["home_assistant_outdoor_entities"] = ha_config["outdoor_entities"]
+        instances = self.storage.ha_instances()
+        measurements = self.storage.measurements()
+        if instances:
+            update["home_assistant_instances"] = [
+                *self.settings.home_assistant_instances,
+                *instances,
+            ]
+        if measurements:
+            update["home_assistant_measurements"] = [
+                *self.settings.home_assistant_measurements,
+                *measurements,
+            ]
+            # measurements added in the web UI are meant to be used, no
+            # need to also list the source in HAW_OBSERVATION_SOURCES
+            if "home_assistant" not in self.settings.observation_sources:
+                update["observation_sources"] = [
+                    *self.settings.observation_sources,
+                    "home_assistant",
+                ]
         es_config = self.storage.observation_source_settings("elasticsearch")
         if es_config:
             if "url" in es_config:
@@ -152,25 +217,186 @@ class WeatherService:
             raise RuntimeError(f"built-in observation source '{name}' is not registered")
         return source_cls(settings)
 
+    def _migrate_legacy_home_assistant(self) -> None:
+        """Convert the former single Home Assistant UI configuration
+        (one URL/token plus per-location entity lists) into an instance with
+        a list of measurements."""
+        config = self.storage.observation_source_settings("home_assistant")
+        if not config:
+            return
+        if config.get("url") or config.get("token"):
+            instance_id = _unique_id(
+                "home_assistant", self._instance_ids() | {ENVIRONMENT_INSTANCE_ID}
+            )
+            self.storage.save_ha_instance(
+                HomeAssistantInstance(
+                    id=instance_id,
+                    name="Home Assistant",
+                    url=config.get("url") or self.settings.home_assistant_url,
+                    token=config.get("token") or self.settings.home_assistant_token,
+                )
+            )
+        else:
+            instance_id = ENVIRONMENT_INSTANCE_ID
+        for scope in ("indoor", "outdoor"):
+            for location_id, entity_ids in (config.get(f"{scope}_entities") or {}).items():
+                for entity_id in entity_ids or []:
+                    try:
+                        self.storage.add_measurement(
+                            Measurement(
+                                instance_id=instance_id,
+                                location_id=location_id,
+                                entity_id=entity_id,
+                                scope=scope,
+                            )
+                        )
+                    except sqlite3.IntegrityError:
+                        continue
+        self.storage.delete_observation_source_settings("home_assistant")
+        LOGGER.info("migrated the Home Assistant settings to instance '%s'", instance_id)
+
+    def _instance_ids(self) -> set:
+        return set(effective_instances(self.settings)) | {
+            item.id for item in self.storage.ha_instances()
+        }
+
+    def home_assistant_status(self) -> HomeAssistantSettingsInfo:
+        settings = self.observation_settings()
+        environment_instances = effective_instances(self.settings)
+        stored_instances = [
+            item
+            for item in self.storage.ha_instances()
+            if item.id not in environment_instances
+        ]
+        environment_measurements = effective_measurements(self.settings)
+        stored_measurements = self.storage.measurements()
+        counts = Counter(
+            item.instance_id
+            for item in [*environment_measurements, *stored_measurements]
+        )
+        instances = [
+            HomeAssistantInstanceInfo(
+                id=item.id,
+                name=item.name,
+                url=item.url,
+                token_set=bool(item.token),
+                origin=origin,
+                configured=bool(item.url and item.token),
+                measurement_count=counts[item.id],
+            )
+            for origin, items in (
+                ("environment", environment_instances.values()),
+                ("ui", stored_instances),
+            )
+            for item in items
+        ]
+        measurements = [
+            MeasurementInfo(**item.model_dump(), origin=origin)
+            for origin, items in (
+                ("environment", environment_measurements),
+                ("ui", stored_measurements),
+            )
+            for item in items
+        ]
+        return HomeAssistantSettingsInfo(
+            configured=any(item.configured for item in instances),
+            enabled="home_assistant" in settings.observation_sources,
+            instances=instances,
+            measurements=measurements,
+        )
+
+    def _stored_instance(self, instance_id: str) -> HomeAssistantInstance:
+        for item in self.storage.ha_instances():
+            if item.id == instance_id:
+                return item
+        if instance_id in effective_instances(self.settings):
+            raise ConflictError(
+                f"instance '{instance_id}' is configured through the environment"
+            )
+        raise UnknownInstanceError(instance_id)
+
+    def add_ha_instance(self, body: HomeAssistantInstanceIn) -> ObservationSourcesInfo:
+        instance_id = _unique_id(
+            _slug(body.name, "home_assistant"),
+            self._instance_ids() | {ENVIRONMENT_INSTANCE_ID},
+        )
+        self.storage.save_ha_instance(
+            HomeAssistantInstance(
+                id=instance_id, name=body.name, url=body.url, token=body.token
+            )
+        )
+        return self.observation_sources_status()
+
+    def update_ha_instance(
+        self, instance_id: str, body: HomeAssistantInstanceIn
+    ) -> ObservationSourcesInfo:
+        stored = self._stored_instance(instance_id)
+        self.storage.save_ha_instance(
+            HomeAssistantInstance(
+                id=instance_id,
+                name=body.name,
+                # the URL is always resubmitted, the token is write-only:
+                # an empty token keeps the stored one
+                url=body.url,
+                token=body.token or stored.token,
+            )
+        )
+        return self.observation_sources_status()
+
+    def delete_ha_instance(self, instance_id: str) -> ObservationSourcesInfo:
+        self._stored_instance(instance_id)
+        self.storage.delete_ha_instance(instance_id)
+        return self.observation_sources_status()
+
+    def _check_measurement(
+        self, body: MeasurementIn, ignore_id: Optional[int] = None
+    ) -> Measurement:
+        self.location(body.location_id)  # raises UnknownLocationError
+        if body.instance_id not in self._instance_ids():
+            raise UnknownInstanceError(body.instance_id)
+        settings = self.observation_settings()
+        same_slot = [
+            item
+            for item in effective_measurements(settings)
+            if item.location_id == body.location_id
+            and item.scope == body.scope
+            and (ignore_id is None or item.id != ignore_id)
+        ]
+        if len(same_slot) >= MAX_ENTITIES_PER_LOCATION:
+            raise ConflictError(
+                f"at most {MAX_ENTITIES_PER_LOCATION} {body.scope} measurements "
+                "per location"
+            )
+        return Measurement(**body.model_dump())
+
+    def add_measurement(self, body: MeasurementIn) -> ObservationSourcesInfo:
+        measurement = self._check_measurement(body)
+        try:
+            self.storage.add_measurement(measurement)
+        except sqlite3.IntegrityError as exc:
+            raise ConflictError("this measurement already exists") from exc
+        return self.observation_sources_status()
+
+    def update_measurement(
+        self, measurement_id: int, body: MeasurementIn
+    ) -> ObservationSourcesInfo:
+        if not any(item.id == measurement_id for item in self.storage.measurements()):
+            raise UnknownMeasurementError(str(measurement_id))
+        measurement = self._check_measurement(body, ignore_id=measurement_id)
+        try:
+            self.storage.update_measurement(measurement_id, measurement)
+        except sqlite3.IntegrityError as exc:
+            raise ConflictError("this measurement already exists") from exc
+        return self.observation_sources_status()
+
+    def delete_measurement(self, measurement_id: int) -> ObservationSourcesInfo:
+        if not self.storage.delete_measurement(measurement_id):
+            raise UnknownMeasurementError(str(measurement_id))
+        return self.observation_sources_status()
+
     def observation_sources_status(self) -> ObservationSourcesInfo:
         """Current Home Assistant/Elasticsearch configuration for the UI."""
         settings = self.observation_settings()
-        ha_config = self.storage.observation_source_settings("home_assistant") or {}
-        ha_source = self._built_in_observation_source("home_assistant", settings)
-        ha_origin = None
-        if ha_config:
-            ha_origin = "ui"
-        elif self.settings.home_assistant_url or self.settings.home_assistant_token:
-            ha_origin = "environment"
-        home_assistant = HomeAssistantSettingsInfo(
-            configured=bool(settings.home_assistant_url and settings.home_assistant_token),
-            available=ha_source.is_available(),
-            origin=ha_origin,
-            url=settings.home_assistant_url,
-            indoor_entities=settings.home_assistant_indoor_entities,
-            outdoor_entities=settings.home_assistant_outdoor_entities,
-        )
-
         es_config = self.storage.observation_source_settings("elasticsearch") or {}
         es_source = self._built_in_observation_source("elasticsearch", settings)
         es_origin = None
@@ -196,42 +422,9 @@ class WeatherService:
             indoor_fields=settings.elasticsearch_indoor_fields,
             outdoor_fields=settings.elasticsearch_outdoor_fields,
         )
-        return ObservationSourcesInfo(home_assistant=home_assistant, elasticsearch=elasticsearch)
-
-    def set_home_assistant_settings(
-        self, settings_in: HomeAssistantSettingsIn
-    ) -> ObservationSourcesInfo:
-        self.location(settings_in.location_id)  # raises UnknownLocationError
-        config = self.storage.observation_source_settings("home_assistant") or {}
-        # The UI always resubmits the full URL field (unlike the write-only
-        # token), so an empty value means "clear the stored URL".
-        config["url"] = settings_in.url
-        if settings_in.token:
-            config["token"] = settings_in.token
-        indoor_entities = dict(config.get("indoor_entities") or {})
-        outdoor_entities = dict(config.get("outdoor_entities") or {})
-        if settings_in.indoor_entities:
-            indoor_entities[settings_in.location_id] = settings_in.indoor_entities
-        else:
-            indoor_entities.pop(settings_in.location_id, None)
-        if settings_in.outdoor_entities:
-            outdoor_entities[settings_in.location_id] = settings_in.outdoor_entities
-        else:
-            outdoor_entities.pop(settings_in.location_id, None)
-        config["indoor_entities"] = indoor_entities
-        config["outdoor_entities"] = outdoor_entities
-        if not (config.get("url") or config.get("token") or indoor_entities or outdoor_entities):
-            # Nothing meaningful left to store (e.g. an empty form was
-            # submitted) - remove the row so the environment configuration,
-            # if any, takes effect again instead of a stale "ui" origin.
-            self.storage.delete_observation_source_settings("home_assistant")
-        else:
-            self.storage.set_observation_source_settings("home_assistant", config)
-        return self.observation_sources_status()
-
-    def delete_home_assistant_settings(self) -> ObservationSourcesInfo:
-        self.storage.delete_observation_source_settings("home_assistant")
-        return self.observation_sources_status()
+        return ObservationSourcesInfo(
+            home_assistant=self.home_assistant_status(), elasticsearch=elasticsearch
+        )
 
     def set_elasticsearch_settings(
         self, settings_in: ElasticsearchSettingsIn
@@ -386,11 +579,73 @@ class WeatherService:
         return self.sources()
 
     # ------------------------------------------------------------------
+    def locations(self) -> List[LocationInfo]:
+        """Configured (environment) locations followed by the UI ones."""
+        result = [
+            LocationInfo(**location.model_dump()) for location in self.settings.locations
+        ]
+        known = {location.id for location in result}
+        for location in self.storage.locations():
+            if location.id not in known:
+                result.append(LocationInfo(**location.model_dump(), custom=True))
+        return result
+
     def location(self, location_id: str) -> Location:
         location = self.settings.location(location_id)
         if location is None:
+            for stored in self.storage.locations():
+                if stored.id == location_id:
+                    return stored
             raise UnknownLocationError(location_id)
         return location
+
+    async def add_location(self, body: LocationIn) -> List[LocationInfo]:
+        """Add a location; missing coordinates are looked up by name."""
+        latitude, longitude, timezone_name = body.latitude, body.longitude, body.timezone
+        if (latitude is None) != (longitude is None):
+            raise LocationLookupError("enter both latitude and longitude, or neither")
+        async with self._client_factory() as client:
+            if latitude is None or longitude is None:
+                try:
+                    found = await geocode(client, body.name)
+                except Exception as exc:  # noqa: BLE001 - reported to the user
+                    raise LocationLookupError(
+                        f"could not look up '{body.name}', please enter latitude/longitude"
+                    ) from exc
+                if found is None:
+                    raise LocationLookupError(
+                        f"'{body.name}' was not found, please enter latitude/longitude"
+                    )
+                latitude, longitude = found.latitude, found.longitude
+                timezone_name = timezone_name or found.timezone
+            if not timezone_name:
+                timezone_name = await lookup_timezone(client, latitude, longitude)
+        timezone_name = timezone_name or "UTC"
+        try:
+            ZoneInfo(timezone_name)
+        except Exception as exc:  # noqa: BLE001 - invalid user input
+            raise LocationLookupError(f"unknown time zone '{timezone_name}'") from exc
+        taken = {location.id for location in self.locations()}
+        location = Location(
+            id=_unique_id(_slug(body.name, "location"), taken),
+            name=body.name,
+            latitude=round(latitude, 4),
+            longitude=round(longitude, 4),
+            timezone=timezone_name,
+            aemet_municipality=body.aemet_municipality,
+        )
+        self.storage.save_location(location)
+        return self.locations()
+
+    def delete_location(self, location_id: str) -> List[LocationInfo]:
+        if self.settings.location(location_id) is not None:
+            raise ConflictError(
+                f"location '{location_id}' is configured through the environment"
+            )
+        if not self.storage.delete_location(location_id):
+            raise UnknownLocationError(location_id)
+        self._cache.pop(location_id, None)
+        return self.locations()
 
     def providers_for(self, location: Location) -> List[WeatherProvider]:
         """Active providers that cover ``location``."""
@@ -449,6 +704,9 @@ class WeatherService:
         self.storage.save_observations(observations)
 
         forecast = self._build(location, forecasts, agro)
+        self.storage.save_hourly_predictions(
+            location_id, forecast.generated_at, forecast.hourly
+        )
         self._cache[location_id] = forecast
         return forecast
 
@@ -502,6 +760,111 @@ class WeatherService:
         scores = self.scores(location_id)
         async with self._client_factory() as client:
             return await self.verifier.verify(client, location.id, location.name, scores)
+
+    async def _home_assistant_hourly(
+        self, client: httpx.AsyncClient, location: Location, start: datetime, end: datetime
+    ) -> Dict[datetime, float]:
+        settings = self.observation_settings()
+        if "home_assistant" not in settings.observation_sources:
+            return {}
+        source = HomeAssistantObservationSource(settings)
+        if not (source.is_available() and source.supports(location)):
+            return {}
+        try:
+            return await source.fetch_hourly(client, location, start, end)
+        except Exception as exc:  # noqa: BLE001 - Open-Meteo is the fallback
+            LOGGER.warning("Home Assistant history failed for %s: %s", location.id, exc)
+            return {}
+
+    async def history(self, location_id: str) -> ForecastHistory:
+        """The last 24 hours: archived hourly consensus vs. measured values.
+
+        Temperatures measured by Home Assistant outdoor sensors win over the
+        Open-Meteo values; precipitation always comes from Open-Meteo.
+        """
+        location = self.location(location_id)
+        end = now_utc().replace(minute=0, second=0, microsecond=0)
+        start = end - timedelta(hours=24)
+        predictions = self.storage.hourly_predictions(location_id, start, end)
+
+        async def open_meteo(client: httpx.AsyncClient):
+            try:
+                return await fetch_hourly_observations(client, location, start, end)
+            except Exception as exc:  # noqa: BLE001 - show the predictions anyway
+                LOGGER.warning("hourly observations failed for %s: %s", location_id, exc)
+                return {}
+
+        async with self._client_factory() as client:
+            measured, home_assistant = await asyncio.gather(
+                open_meteo(client),
+                self._home_assistant_hourly(client, location, start, end),
+            )
+
+        hours: List[HistoryHour] = []
+        temperature_errors: List[float] = []
+        precipitation_errors: List[float] = []
+        sources = set()
+        slot = start
+        while slot < end:
+            issued_at, predicted = predictions.get(slot, (None, None))
+            observed = measured.get(slot)
+            measured_temperature = home_assistant.get(slot)
+            temperature_source = "home_assistant" if measured_temperature is not None else None
+            if measured_temperature is None and observed and observed.temperature is not None:
+                measured_temperature = observed.temperature
+                temperature_source = "open_meteo"
+            measured_precipitation = observed.precipitation_mm if observed else None
+            if temperature_source:
+                sources.add(temperature_source)
+            if measured_precipitation is not None:
+                sources.add("open_meteo")
+            row = HistoryHour(
+                target_time=slot,
+                issued_at=issued_at,
+                lead_hours=(
+                    round((slot - issued_at).total_seconds() / 3600, 1)
+                    if issued_at
+                    else None
+                ),
+                predicted_temperature=predicted.temperature if predicted else None,
+                measured_temperature=measured_temperature,
+                predicted_precipitation_mm=predicted.precipitation_mm if predicted else None,
+                measured_precipitation_mm=measured_precipitation,
+                predicted_condition=predicted.condition if predicted else None,
+                measured_condition=observed.condition if observed else None,
+                temperature_source=temperature_source,
+            )
+            if row.predicted_temperature is not None and measured_temperature is not None:
+                row.temperature_error = round(
+                    row.predicted_temperature - measured_temperature, 2
+                )
+                temperature_errors.append(row.temperature_error)
+            if (
+                row.predicted_precipitation_mm is not None
+                and measured_precipitation is not None
+            ):
+                row.precipitation_error = round(
+                    row.predicted_precipitation_mm - measured_precipitation, 2
+                )
+                precipitation_errors.append(row.precipitation_error)
+            hours.append(row)
+            slot += timedelta(hours=1)
+
+        def mean(values: List[float]) -> Optional[float]:
+            return round(sum(values) / len(values), 2) if values else None
+
+        return ForecastHistory(
+            location_id=location_id,
+            generated_at=now_utc(),
+            start=start,
+            end=end,
+            hours=hours,
+            samples=len(temperature_errors),
+            temperature_mae=mean([abs(value) for value in temperature_errors]),
+            temperature_bias=mean(temperature_errors),
+            precipitation_mae=mean([abs(value) for value in precipitation_errors]),
+            sources=sorted(sources),
+        )
 
     # ------------------------------------------------------------------
     def set_override(self, override: ProviderOverride) -> ProviderRanking:

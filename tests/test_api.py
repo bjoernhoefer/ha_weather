@@ -9,6 +9,8 @@ from app.models import MAX_ENTITIES_PER_LOCATION, MAX_ENTITY_LENGTH, MAX_SETTING
 from app.service import WeatherService
 from app.storage import Storage
 
+from .conftest import VIENNA
+
 
 @pytest.fixture
 def api(settings, service):
@@ -373,11 +375,9 @@ def test_observation_sources_are_initially_unconfigured(api):
     payload = api.get("/api/observation-sources").json()
     assert payload["home_assistant"] == {
         "configured": False,
-        "available": False,
-        "origin": None,
-        "url": None,
-        "indoor_entities": {},
-        "outdoor_entities": {},
+        "enabled": False,
+        "instances": [],
+        "measurements": [],
     }
     assert payload["elasticsearch"] == {
         "configured": False,
@@ -391,118 +391,173 @@ def test_observation_sources_are_initially_unconfigured(api):
     }
 
 
-def test_home_assistant_settings_are_accepted_and_stored(api):
+def _add_instance(api, name="Home", url="http://homeassistant.local:8123", token="secret-token"):
+    response = api.post(
+        "/api/observation-sources/home-assistant/instances",
+        json={"name": name, "url": url, "token": token},
+    )
+    assert response.status_code == 201, response.text
+    return response
+
+
+def test_home_assistant_instances_can_be_added(api):
+    response = _add_instance(api)
+    assert "secret-token" not in response.text  # the token is never returned
+    _add_instance(api, name="Holiday home", url="http://mallorca.local:8123", token="t2")
+
+    home_assistant = api.get("/api/observation-sources").json()["home_assistant"]
+    assert home_assistant["configured"] is True
+    instances = {item["id"]: item for item in home_assistant["instances"]}
+    assert set(instances) == {"home", "holiday_home"}
+    assert instances["home"] == {
+        "id": "home",
+        "name": "Home",
+        "url": "http://homeassistant.local:8123",
+        "token_set": True,
+        "origin": "ui",
+        "configured": True,
+        "measurement_count": 0,
+    }
+    assert "secret-token" not in api.get("/api/observation-sources").text
+
+
+def test_home_assistant_instance_ids_are_unique(api):
+    _add_instance(api, name="Home")
+    _add_instance(api, name="Home")
+    ids = [
+        item["id"]
+        for item in api.get("/api/observation-sources").json()["home_assistant"]["instances"]
+    ]
+    assert sorted(ids) == ["home", "home_2"]
+
+
+def test_home_assistant_token_is_kept_when_not_resubmitted(api):
+    _add_instance(api)
     response = api.put(
-        "/api/observation-sources/home-assistant",
-        json={
-            "url": "http://homeassistant.local:8123",
-            "token": "secret-token",
-            "location_id": "vienna",
-            "indoor_entities": ["sensor.living_room_temperature"],
-            "outdoor_entities": ["sensor.garden_temperature"],
-        },
+        "/api/observation-sources/home-assistant/instances/home",
+        json={"name": "Vienna flat", "url": "http://new-host:8123"},
     )
     assert response.status_code == 200
-    assert "secret-token" not in response.text  # the token is never returned
-    home_assistant = response.json()["home_assistant"]
-    assert home_assistant["configured"] is True
-    assert home_assistant["available"] is True
-    assert home_assistant["origin"] == "ui"
-    assert home_assistant["url"] == "http://homeassistant.local:8123"
-    assert home_assistant["indoor_entities"] == {
-        "vienna": ["sensor.living_room_temperature"]
-    }
-    assert home_assistant["outdoor_entities"] == {
-        "vienna": ["sensor.garden_temperature"]
-    }
-
-    # stored values survive a fresh read, and the token is still never shown
-    reloaded = api.get("/api/observation-sources").json()["home_assistant"]
-    assert reloaded == home_assistant
-    assert "secret-token" not in api.get("/api/observation-sources").text
+    (instance,) = response.json()["home_assistant"]["instances"]
+    assert instance["name"] == "Vienna flat"
+    assert instance["url"] == "http://new-host:8123"
+    assert instance["token_set"] is True
 
 
 def test_home_assistant_overlong_values_are_truncated_not_rejected(api):
     overlong_url = "http://homeassistant.local:8123/" + "a" * (MAX_SETTING_LENGTH + 50)
-    overlong_token = "t" * (MAX_SETTING_LENGTH + 50)
-    many_entities = [f"sensor.outdoor_{i}" for i in range(MAX_ENTITIES_PER_LOCATION + 10)]
-    overlong_entity = "sensor." + "x" * (MAX_ENTITY_LENGTH + 20)
+    response = _add_instance(api, url=overlong_url, token="t" * (MAX_SETTING_LENGTH + 50))
+    (instance,) = response.json()["home_assistant"]["instances"]
+    assert instance["url"] == overlong_url[:MAX_SETTING_LENGTH]
 
+
+def test_measurements_are_coupled_with_instances_and_locations(api):
+    _add_instance(api)
+    for entity_id, scope in (
+        ("sensor.garden_temperature", "outdoor"),
+        ("sensor.living_room_temperature", "indoor"),
+    ):
+        response = api.post(
+            "/api/observation-sources/home-assistant/measurements",
+            json={
+                "instance_id": "home",
+                "location_id": "vienna",
+                "entity_id": entity_id,
+                "scope": scope,
+                "name": "Garden" if scope == "outdoor" else "",
+            },
+        )
+        assert response.status_code == 201, response.text
+
+    home_assistant = response.json()["home_assistant"]
+    # measurements added in the UI enable the source without HAW_OBSERVATION_SOURCES
+    assert home_assistant["enabled"] is True
+    assert home_assistant["instances"][0]["measurement_count"] == 2
+    measurements = {item["entity_id"]: item for item in home_assistant["measurements"]}
+    garden = measurements["sensor.garden_temperature"]
+    assert garden["instance_id"] == "home"
+    assert garden["location_id"] == "vienna"
+    assert garden["scope"] == "outdoor"
+    assert garden["name"] == "Garden"
+    assert garden["origin"] == "ui"
+    assert measurements["sensor.living_room_temperature"]["scope"] == "indoor"
+
+    # edit: move the garden sensor to "indoor"
     response = api.put(
-        "/api/observation-sources/home-assistant",
+        f"/api/observation-sources/home-assistant/measurements/{garden['id']}",
         json={
-            "url": overlong_url,
-            "token": overlong_token,
+            "instance_id": "home",
             "location_id": "vienna",
-            "indoor_entities": [overlong_entity],
-            "outdoor_entities": many_entities,
+            "entity_id": "sensor.garden_temperature",
+            "scope": "indoor",
+            "name": "Greenhouse",
         },
     )
     assert response.status_code == 200
-    home_assistant = response.json()["home_assistant"]
-    assert len(home_assistant["url"]) == MAX_SETTING_LENGTH
-    assert home_assistant["url"] == overlong_url[:MAX_SETTING_LENGTH]
-    assert len(home_assistant["indoor_entities"]["vienna"][0]) == MAX_ENTITY_LENGTH
-    assert len(home_assistant["outdoor_entities"]["vienna"]) == MAX_ENTITIES_PER_LOCATION
-    assert home_assistant["outdoor_entities"]["vienna"] == many_entities[:MAX_ENTITIES_PER_LOCATION]
+    updated = {
+        item["id"]: item for item in response.json()["home_assistant"]["measurements"]
+    }[garden["id"]]
+    assert (updated["scope"], updated["name"]) == ("indoor", "Greenhouse")
 
-
-def test_home_assistant_settings_can_be_removed(api):
-    api.put(
-        "/api/observation-sources/home-assistant",
-        json={
-            "url": "http://homeassistant.local:8123",
-            "token": "secret-token",
-            "location_id": "vienna",
-            "indoor_entities": ["sensor.living_room_temperature"],
-            "outdoor_entities": [],
-        },
+    response = api.delete(
+        f"/api/observation-sources/home-assistant/measurements/{garden['id']}"
     )
-    removed = api.delete("/api/observation-sources/home-assistant").json()["home_assistant"]
-    assert removed == {
-        "configured": False,
-        "available": False,
-        "origin": None,
-        "url": None,
-        "indoor_entities": {},
-        "outdoor_entities": {},
+    assert response.status_code == 200
+    assert len(response.json()["home_assistant"]["measurements"]) == 1
+    assert (
+        api.delete(
+            f"/api/observation-sources/home-assistant/measurements/{garden['id']}"
+        ).status_code
+        == 404
+    )
+
+
+def test_measurement_validation(api):
+    _add_instance(api)
+    base = {
+        "instance_id": "home",
+        "location_id": "vienna",
+        "entity_id": "sensor.garden_temperature",
+        "scope": "outdoor",
     }
+    url = "/api/observation-sources/home-assistant/measurements"
+    assert api.post(url, json={**base, "location_id": "mars"}).status_code == 404
+    assert api.post(url, json={**base, "instance_id": "nope"}).status_code == 404
+    assert api.post(url, json={**base, "entity_id": "not an entity"}).status_code == 422
+    assert api.post(url, json={**base, "scope": "attic"}).status_code == 422
+    assert api.post(url, json=base).status_code == 201
+    assert api.post(url, json=base).status_code == 409  # duplicate
 
 
-def test_home_assistant_settings_reject_unknown_location(api):
-    response = api.put(
-        "/api/observation-sources/home-assistant",
-        json={"location_id": "mars", "indoor_entities": ["sensor.x"]},
-    )
-    assert response.status_code == 404
-
-
-def test_home_assistant_token_is_kept_when_not_resubmitted(api):
-    api.put(
-        "/api/observation-sources/home-assistant",
-        json={
-            "url": "http://homeassistant.local:8123",
-            "token": "secret-token",
+def test_measurement_limit_per_location_and_scope(api):
+    _add_instance(api)
+    url = "/api/observation-sources/home-assistant/measurements"
+    for index in range(MAX_ENTITIES_PER_LOCATION):
+        body = {
+            "instance_id": "home",
             "location_id": "vienna",
-            "indoor_entities": ["sensor.a"],
-            "outdoor_entities": [],
-        },
+            "entity_id": f"sensor.outdoor_{index}",
+        }
+        assert api.post(url, json=body).status_code == 201
+    body["entity_id"] = "sensor.one_too_many"
+    assert api.post(url, json=body).status_code == 409
+
+
+def test_deleting_an_instance_removes_its_measurements(api):
+    _add_instance(api)
+    api.post(
+        "/api/observation-sources/home-assistant/measurements",
+        json={"instance_id": "home", "location_id": "vienna", "entity_id": "sensor.a"},
     )
-    # resubmitting without a token (e.g. only changing entities) must not
-    # clear the previously stored token
-    response = api.put(
-        "/api/observation-sources/home-assistant",
-        json={
-            "url": "http://homeassistant.local:8123",
-            "location_id": "vienna",
-            "indoor_entities": ["sensor.a", "sensor.b"],
-            "outdoor_entities": [],
-        },
-    )
-    home_assistant = response.json()["home_assistant"]
-    assert home_assistant["origin"] == "ui"
-    assert home_assistant["available"] is True
-    assert home_assistant["indoor_entities"] == {"vienna": ["sensor.a", "sensor.b"]}
+    response = api.delete("/api/observation-sources/home-assistant/instances/home")
+    assert response.status_code == 200
+    assert response.json()["home_assistant"] == {
+        "configured": False,
+        "enabled": False,
+        "instances": [],
+        "measurements": [],
+    }
+    assert api.delete("/api/observation-sources/home-assistant/instances/home").status_code == 404
 
 
 def test_elasticsearch_settings_are_accepted_and_stored(api):
@@ -588,37 +643,167 @@ def test_elasticsearch_settings_reject_unknown_location(api):
     assert response.status_code == 404
 
 
-def test_observation_sources_ui_settings_override_the_environment(tmp_path, client_factory):
+def test_environment_home_assistant_is_a_read_only_instance(tmp_path, client_factory):
     settings = Settings(
         database_path=str(tmp_path / "obs-env.sqlite3"),
         home_assistant_url="http://old-host:8123",
         home_assistant_token="old-token",
+        home_assistant_outdoor_entities={"vienna": ["sensor.garden_temperature"]},
     )
     storage = Storage(settings.database_path)
     service = WeatherService(settings, storage, client_factory=client_factory)
     with TestClient(create_app(settings, service)) as client:
-        sources = client.get("/api/observation-sources").json()
-        assert sources["home_assistant"]["origin"] == "environment"
-        assert sources["home_assistant"]["url"] == "http://old-host:8123"
+        home_assistant = client.get("/api/observation-sources").json()["home_assistant"]
+        (instance,) = home_assistant["instances"]
+        assert instance["id"] == "environment"
+        assert instance["origin"] == "environment"
+        assert instance["url"] == "http://old-host:8123"
+        assert instance["measurement_count"] == 1
+        (measurement,) = home_assistant["measurements"]
+        assert measurement["origin"] == "environment"
+        assert measurement["id"] is None
+        assert "old-token" not in client.get("/api/observation-sources").text
 
-        client.put(
-            "/api/observation-sources/home-assistant",
+        # read only, but UI measurements can be coupled with it
+        url = "/api/observation-sources/home-assistant/instances/environment"
+        assert client.delete(url).status_code == 409
+        assert client.put(url, json={"name": "x"}).status_code == 409
+        response = client.post(
+            "/api/observation-sources/home-assistant/measurements",
             json={
-                "url": "http://new-host:8123",
-                "token": "new-token",
+                "instance_id": "environment",
                 "location_id": "vienna",
-                "indoor_entities": [],
-                "outdoor_entities": ["sensor.garden_temperature"],
+                "entity_id": "sensor.balcony_temperature",
             },
         )
-        sources = client.get("/api/observation-sources").json()
-        assert sources["home_assistant"]["origin"] == "ui"
-        assert sources["home_assistant"]["url"] == "http://new-host:8123"
-
-        # removing the UI settings falls back to the environment ones
-        client.delete("/api/observation-sources/home-assistant")
-        sources = client.get("/api/observation-sources").json()
-        assert sources["home_assistant"]["origin"] == "environment"
-        assert sources["home_assistant"]["url"] == "http://old-host:8123"
+        assert response.status_code == 201
+        assert response.json()["home_assistant"]["instances"][0]["measurement_count"] == 2
     storage.close()
 
+
+def test_legacy_home_assistant_ui_settings_are_migrated(tmp_path, client_factory):
+    settings = Settings(database_path=str(tmp_path / "legacy.sqlite3"), locations=[VIENNA])
+    storage = Storage(settings.database_path)
+    storage.set_observation_source_settings(
+        "home_assistant",
+        {
+            "url": "http://homeassistant.local:8123",
+            "token": "secret-token",
+            "indoor_entities": {"vienna": ["sensor.living_room_temperature"]},
+            "outdoor_entities": {"vienna": ["sensor.garden_temperature"]},
+        },
+    )
+    service = WeatherService(settings, storage, client_factory=client_factory)
+    assert storage.observation_source_settings("home_assistant") is None
+    (instance,) = storage.ha_instances()
+    assert (instance.url, instance.token) == ("http://homeassistant.local:8123", "secret-token")
+    assert {(item.entity_id, item.scope, item.instance_id) for item in storage.measurements()} == {
+        ("sensor.living_room_temperature", "indoor", instance.id),
+        ("sensor.garden_temperature", "outdoor", instance.id),
+    }
+    assert service.observation_sources_status().home_assistant.configured is True
+    storage.close()
+
+
+def test_locations_can_be_added_by_name_and_deleted(api):
+    response = api.post("/api/locations", json={"name": "Graz"})
+    assert response.status_code == 201, response.text
+    graz = {item["id"]: item for item in response.json()}["graz"]
+    assert graz == {
+        "id": "graz",
+        "name": "Graz",
+        "latitude": 47.0667,
+        "longitude": 15.45,
+        "timezone": "Europe/Vienna",
+        "aemet_municipality": None,
+        "custom": True,
+    }
+    assert api.get("/api/forecast/graz").status_code == 200
+
+    assert api.delete("/api/locations/graz").status_code == 200
+    assert [item["id"] for item in api.get("/api/locations").json()] == ["vienna"]
+    assert api.get("/api/forecast/graz").status_code == 404
+
+
+def test_locations_with_coordinates_skip_the_geocoding(api):
+    response = api.post(
+        "/api/locations",
+        json={"name": "Garden", "latitude": 39.5386, "longitude": 3.3319},
+    )
+    assert response.status_code == 201
+    garden = response.json()[-1]
+    assert (garden["id"], garden["latitude"], garden["longitude"]) == ("garden", 39.5386, 3.3319)
+    assert garden["timezone"] == "Europe/Madrid"  # looked up for the coordinates
+    # a second location with the same name gets its own id
+    response = api.post(
+        "/api/locations",
+        json={"name": "Garden", "latitude": 1, "longitude": 2, "timezone": "UTC"},
+    )
+    assert response.json()[-1]["id"] == "garden_2"
+
+
+def test_location_validation(api):
+    assert api.post("/api/locations", json={"name": "Atlantis"}).status_code == 422
+    assert api.post("/api/locations", json={"name": "X", "latitude": 1}).status_code == 422
+    assert api.post("/api/locations", json={"name": "X", "latitude": 91, "longitude": 0}).status_code == 422
+    assert (
+        api.post(
+            "/api/locations",
+            json={"name": "X", "latitude": 1, "longitude": 1, "timezone": "Mars/Base"},
+        ).status_code
+        == 422
+    )
+    assert api.post("/api/locations", json={"name": "  "}).status_code == 422
+    # environment locations are read only
+    assert api.delete("/api/locations/vienna").status_code == 409
+    assert api.delete("/api/locations/unknown").status_code == 404
+
+
+def test_deleting_a_location_removes_its_measurements(api):
+    api.post("/api/locations", json={"name": "Graz"})
+    _add_instance(api)
+    api.post(
+        "/api/observation-sources/home-assistant/measurements",
+        json={"instance_id": "home", "location_id": "graz", "entity_id": "sensor.a"},
+    )
+    api.delete("/api/locations/graz")
+    assert api.get("/api/observation-sources").json()["home_assistant"]["measurements"] == []
+
+
+def test_history_compares_the_archived_prediction_with_measurements(api, service):
+    from datetime import timedelta
+
+    from app.clock import now_utc
+    from app.models import AggregatedHour
+
+    hour = now_utc().replace(minute=0, second=0, microsecond=0) - timedelta(hours=3)
+    service.storage.save_hourly_predictions(
+        "vienna",
+        hour - timedelta(hours=20),
+        [AggregatedHour(target_time=hour, temperature=17.5, precipitation_mm=0.4, condition="rain")],
+    )
+    payload = api.get("/api/history/vienna").json()
+    assert len(payload["hours"]) == 24
+    row = {item["target_time"]: item for item in payload["hours"]}[
+        hour.isoformat().replace("+00:00", "Z")
+    ]
+    assert row["predicted_temperature"] == 17.5
+    assert row["measured_temperature"] == 15.0
+    assert row["temperature_error"] == 2.5
+    assert row["precipitation_error"] == 0.4
+    assert row["lead_hours"] == 20.0
+    assert row["temperature_source"] == "open_meteo"
+    assert payload["samples"] == 1
+    assert payload["temperature_mae"] == 2.5
+    assert payload["temperature_bias"] == 2.5
+    assert payload["sources"] == ["open_meteo"]
+    assert api.get("/api/history/mars").status_code == 404
+
+
+def test_refresh_archives_the_hourly_consensus(api, service):
+    api.post("/api/forecast/vienna/refresh")
+    with service.storage._lock:
+        count = service.storage._connection.execute(
+            "SELECT COUNT(*) FROM hourly_predictions"
+        ).fetchone()[0]
+    assert count > 0

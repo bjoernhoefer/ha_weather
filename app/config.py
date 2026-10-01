@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -25,6 +25,32 @@ class Location(BaseModel):
     timezone: str = "UTC"
     #: 5 digit INE municipality code used by AEMET (Spanish locations only)
     aemet_municipality: Optional[str] = Field(default=None, pattern=r"^[0-9]{5}$")
+
+
+#: id of the implicit Home Assistant instance built from the
+#: ``HAW_HOME_ASSISTANT_URL``/``HAW_HOME_ASSISTANT_TOKEN`` environment variables
+ENVIRONMENT_INSTANCE_ID = "environment"
+
+
+class HomeAssistantInstance(BaseModel):
+    """One Home Assistant installation that measurements can be read from."""
+
+    id: str = Field(pattern=r"^[a-z0-9_]{1,40}$")
+    name: str = Field(min_length=1, max_length=100)
+    url: Optional[str] = None
+    token: Optional[str] = None
+
+
+class Measurement(BaseModel):
+    """One Home Assistant sensor coupled with an instance and a location."""
+
+    #: database id, ``None`` for measurements from the environment
+    id: Optional[int] = None
+    instance_id: str
+    location_id: str
+    entity_id: str
+    scope: Literal["indoor", "outdoor"] = "outdoor"
+    name: str = ""
 
 
 DEFAULT_LOCATIONS: List[Location] = [
@@ -89,6 +115,10 @@ class Settings(BaseSettings):
     home_assistant_indoor_entities: Dict[str, List[str]] = Field(default_factory=dict)
     #: ``location_id`` -> list of entity ids, e.g. ``sensor.garden_temperature``
     home_assistant_outdoor_entities: Dict[str, List[str]] = Field(default_factory=dict)
+    #: additional Home Assistant installations (JSON list), e.g. managed in the web UI
+    home_assistant_instances: List[HomeAssistantInstance] = Field(default_factory=list)
+    #: sensors coupled with an instance and a location (JSON list)
+    home_assistant_measurements: List[Measurement] = Field(default_factory=list)
 
     # Elasticsearch (e.g. the free Elastic Cloud tier): aggregates a numeric
     # temperature field per day using the Search API.
@@ -135,6 +165,20 @@ class Settings(BaseSettings):
             if value.startswith("["):
                 return json.loads(value)
             return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator(
+        "home_assistant_instances",
+        "home_assistant_measurements",
+        mode="before",
+    )
+    @classmethod
+    def _parse_json_list(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return []
+            return json.loads(value)
         return value
 
     @field_validator(

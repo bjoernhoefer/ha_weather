@@ -3,22 +3,29 @@
 Reads indoor and outdoor sensor history through Home Assistant's REST API
 (``/api/history/period``) using a long-lived access token, and aggregates the
 numeric sensor states into daily min/max observations. Indoor and outdoor
-sensors are configured independently per location and are tagged with the
-matching ``Observation.scope``.
+sensors are configured as a list of measurements, each coupled with a Home
+Assistant instance and a location, and are tagged with the matching
+``Observation.scope``. Any number of Home Assistant instances is supported.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
-from typing import Dict, List, Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import httpx
 
 from ..clock import now_utc
-from ..config import Location, Settings
+from ..config import (
+    ENVIRONMENT_INSTANCE_ID,
+    HomeAssistantInstance,
+    Location,
+    Measurement,
+    Settings,
+)
 from ..models import Observation
 from .base import ObservationSource, register
 
@@ -33,10 +40,6 @@ def _resolve_timezone(timezone_name: str) -> ZoneInfo:
         return ZoneInfo(timezone_name)
     except Exception:  # noqa: BLE001 - invalid location timezone falls back to UTC
         return ZoneInfo("UTC")
-
-
-def _entities_for(mapping: Dict[str, List[str]], location_id: str) -> List[str]:
-    return list(mapping.get(location_id) or [])
 
 
 def _as_float(value: object) -> Optional[float]:
@@ -135,6 +138,100 @@ def observations_from_history(
     return observations
 
 
+def effective_instances(settings: Settings) -> Dict[str, HomeAssistantInstance]:
+    """Every configured Home Assistant installation by id.
+
+    ``HAW_HOME_ASSISTANT_URL``/``HAW_HOME_ASSISTANT_TOKEN`` form the implicit
+    :data:`ENVIRONMENT_INSTANCE_ID` instance, additional installations come
+    from ``Settings.home_assistant_instances`` (e.g. added in the web UI).
+    """
+    instances: Dict[str, HomeAssistantInstance] = {}
+    if settings.home_assistant_url or settings.home_assistant_token:
+        instances[ENVIRONMENT_INSTANCE_ID] = HomeAssistantInstance(
+            id=ENVIRONMENT_INSTANCE_ID,
+            name="Home Assistant (environment)",
+            url=settings.home_assistant_url,
+            token=settings.home_assistant_token,
+        )
+    for instance in settings.home_assistant_instances:
+        instances.setdefault(instance.id, instance)
+    return instances
+
+
+def effective_measurements(settings: Settings) -> List[Measurement]:
+    """All measurements, including the legacy per-location entity mappings
+    (``HAW_HOME_ASSISTANT_*_ENTITIES``) of the environment instance."""
+    measurements: List[Measurement] = []
+    for scope, mapping in (
+        ("indoor", settings.home_assistant_indoor_entities),
+        ("outdoor", settings.home_assistant_outdoor_entities),
+    ):
+        for location_id, entity_ids in mapping.items():
+            for entity_id in entity_ids or []:
+                measurements.append(
+                    Measurement(
+                        instance_id=ENVIRONMENT_INSTANCE_ID,
+                        location_id=location_id,
+                        entity_id=entity_id,
+                        scope=scope,
+                    )
+                )
+    measurements.extend(settings.home_assistant_measurements)
+    return measurements
+
+
+def _usable(instance: Optional[HomeAssistantInstance]) -> bool:
+    return bool(instance and instance.url and instance.token)
+
+
+def hourly_means(
+    history: List[List[dict]], start: datetime, end: datetime
+) -> Dict[datetime, float]:
+    """Mean sensor value per full hour in ``[start, end)``.
+
+    Like :func:`observations_from_history` the last known value of a series
+    is carried forward into hours without a state change.
+    """
+    start = start.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    buckets: Dict[datetime, List[float]] = {}
+    for series in history:
+        events: List[tuple[datetime, float]] = []
+        for entry in series:
+            value = _as_float(entry.get("state"))
+            stamp = entry.get("last_changed") or entry.get("last_updated")
+            if value is None or not stamp:
+                continue
+            try:
+                when = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            events.append((when, value))
+        events.sort(key=lambda item: item[0])
+        last_value: Optional[float] = None
+        index = 0
+        slot = start
+        while slot < end:
+            slot_end = slot + timedelta(hours=1)
+            values: List[float] = []
+            while index < len(events) and events[index][0] < slot:
+                last_value = events[index][1]
+                index += 1
+            if last_value is not None:
+                values.append(last_value)
+            while index < len(events) and events[index][0] < slot_end:
+                last_value = events[index][1]
+                values.append(last_value)
+                index += 1
+            if values:
+                buckets.setdefault(slot, []).extend(values)
+            slot = slot_end
+    return {
+        slot: round(sum(values) / len(values), 2) for slot, values in buckets.items()
+    }
+
+
 @register
 class HomeAssistantObservationSource(ObservationSource):
     """Indoor and outdoor temperature sensors read from Home Assistant."""
@@ -147,27 +244,37 @@ class HomeAssistantObservationSource(ObservationSource):
     api_key_setting = "home_assistant_token"
 
     def is_available(self) -> bool:
-        return bool(self.settings.home_assistant_url and self.settings.home_assistant_token)
+        return any(_usable(item) for item in effective_instances(self.settings).values())
+
+    def measurements_for(
+        self, location: Location, scope: Optional[str] = None
+    ) -> List[Measurement]:
+        """Measurements of ``location`` whose instance is usable."""
+        instances = effective_instances(self.settings)
+        return [
+            item
+            for item in effective_measurements(self.settings)
+            if item.location_id == location.id
+            and (scope is None or item.scope == scope)
+            and _usable(instances.get(item.instance_id))
+        ]
 
     def supports(self, location: Location) -> bool:
-        return bool(
-            _entities_for(self.settings.home_assistant_indoor_entities, location.id)
-            or _entities_for(self.settings.home_assistant_outdoor_entities, location.id)
-        )
+        return bool(self.measurements_for(location))
 
     async def _history(
         self,
         client: httpx.AsyncClient,
-        settings: Settings,
+        instance: HomeAssistantInstance,
         entity_ids: List[str],
         start: datetime,
         end: datetime,
     ) -> List[List[dict]]:
-        base_url = (settings.home_assistant_url or "").rstrip("/")
+        base_url = (instance.url or "").rstrip("/")
         # the timestamp is part of the URL path, so it must be percent-encoded
         # (its ``+00:00`` UTC offset would otherwise be decoded as a space)
         url = f"{base_url}/api/history/period/{quote(start.isoformat())}"
-        auth_header = " ".join([AUTH_SCHEME, str(settings.home_assistant_token)])
+        auth_header = " ".join([AUTH_SCHEME, str(instance.token)])
         response = await client.get(
             url,
             params={
@@ -179,6 +286,17 @@ class HomeAssistantObservationSource(ObservationSource):
         )
         response.raise_for_status()
         return response.json()
+
+    def _groups(
+        self, location: Location, scope: Optional[str] = None
+    ) -> Dict[Tuple[str, str], List[str]]:
+        """Entity ids per ``(instance_id, scope)``, one request each."""
+        groups: Dict[Tuple[str, str], List[str]] = {}
+        for item in self.measurements_for(location, scope):
+            entity_ids = groups.setdefault((item.instance_id, item.scope), [])
+            if item.entity_id not in entity_ids:
+                entity_ids.append(item.entity_id)
+        return groups
 
     async def fetch(
         self,
@@ -195,15 +313,26 @@ class HomeAssistantObservationSource(ObservationSource):
         start = datetime.combine(local_start, datetime.min.time(), tzinfo=tzinfo)
         end = datetime.combine(local_today, datetime.min.time(), tzinfo=tzinfo)
 
+        instances = effective_instances(self.settings)
+        histories: Dict[str, List[List[dict]]] = {"indoor": [], "outdoor": []}
+        for (instance_id, scope), entity_ids in self._groups(location).items():
+            try:
+                histories[scope].extend(
+                    await self._history(
+                        client, instances[instance_id], entity_ids, start, end
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 - one instance must not break all
+                LOGGER.warning(
+                    "Home Assistant instance %s failed for %s: %s",
+                    instance_id,
+                    location.id,
+                    exc,
+                )
         observations: List[Observation] = []
-        for scope, mapping in (
-            ("indoor", settings.home_assistant_indoor_entities),
-            ("outdoor", settings.home_assistant_outdoor_entities),
-        ):
-            entity_ids = _entities_for(mapping, location.id)
-            if not entity_ids:
+        for scope, history in histories.items():
+            if not history:
                 continue
-            history = await self._history(client, settings, entity_ids, start, end)
             observations.extend(
                 observations_from_history(
                     history,
@@ -215,3 +344,29 @@ class HomeAssistantObservationSource(ObservationSource):
                 )
             )
         return observations
+
+    async def fetch_hourly(
+        self,
+        client: httpx.AsyncClient,
+        location: Location,
+        start: datetime,
+        end: datetime,
+    ) -> Dict[datetime, float]:
+        """Hourly mean of the outdoor sensors of ``location`` in ``[start, end)``."""
+        instances = effective_instances(self.settings)
+        history: List[List[dict]] = []
+        for (instance_id, _scope), entity_ids in self._groups(location, "outdoor").items():
+            try:
+                history.extend(
+                    await self._history(
+                        client, instances[instance_id], entity_ids, start, end
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 - one instance must not break all
+                LOGGER.warning(
+                    "Home Assistant instance %s failed for %s: %s",
+                    instance_id,
+                    location.id,
+                    exc,
+                )
+        return hourly_means(history, start, end) if history else {}

@@ -14,12 +14,16 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from .auth import require_api_key
-from .config import Location, Settings, get_settings
+from .config import Settings, get_settings
 from .models import (
     CustomSource,
     ElasticsearchSettingsIn,
-    HomeAssistantSettingsIn,
+    ForecastHistory,
+    HomeAssistantInstanceIn,
     LocationForecast,
+    LocationIn,
+    LocationInfo,
+    MeasurementIn,
     ObservationSourcesInfo,
     ProviderOverride,
     ProviderRanking,
@@ -30,8 +34,12 @@ from .models import (
 from .providers.open_meteo import OPEN_METEO_MODEL_CATALOG
 from .service import (
     ApiKeyNotSupportedError,
+    ConflictError,
+    LocationLookupError,
     SourceConflictError,
+    UnknownInstanceError,
     UnknownLocationError,
+    UnknownMeasurementError,
     UnknownSourceError,
     WeatherService,
 )
@@ -131,9 +139,42 @@ def create_app(
             raise HTTPException(status_code=404, detail="UI not available")
         return FileResponse(index_file)
 
-    @app.get("/api/locations", response_model=List[Location], dependencies=protected)
-    async def locations() -> List[Location]:
-        return settings.locations
+    @app.get("/api/locations", response_model=List[LocationInfo], dependencies=protected)
+    async def locations(
+        service: WeatherService = Depends(get_service),
+    ) -> List[LocationInfo]:
+        return service.locations()
+
+    @app.post(
+        "/api/locations",
+        response_model=List[LocationInfo],
+        status_code=status.HTTP_201_CREATED,
+        dependencies=protected,
+    )
+    async def add_location(
+        body: LocationIn, service: WeatherService = Depends(get_service)
+    ) -> List[LocationInfo]:
+        try:
+            return await service.add_location(body)
+        except LocationLookupError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+
+    @app.delete(
+        "/api/locations/{location_id}",
+        response_model=List[LocationInfo],
+        dependencies=protected,
+    )
+    async def delete_location(
+        location_id: str, service: WeatherService = Depends(get_service)
+    ) -> List[LocationInfo]:
+        try:
+            return service.delete_location(location_id)
+        except UnknownLocationError as exc:
+            raise _unknown_location(exc) from exc
+        except ConflictError as exc:
+            raise _conflict(exc) from exc
 
     @app.get(
         "/api/providers", response_model=List[ProviderInfo], dependencies=protected
@@ -258,28 +299,71 @@ def create_app(
     ) -> ObservationSourcesInfo:
         return service.observation_sources_status()
 
-    @app.put(
-        "/api/observation-sources/home-assistant",
+    @app.post(
+        "/api/observation-sources/home-assistant/instances",
         response_model=ObservationSourcesInfo,
+        status_code=status.HTTP_201_CREATED,
         dependencies=protected,
     )
-    async def set_home_assistant_settings(
-        body: HomeAssistantSettingsIn, service: WeatherService = Depends(get_service)
+    async def add_home_assistant_instance(
+        body: HomeAssistantInstanceIn, service: WeatherService = Depends(get_service)
     ) -> ObservationSourcesInfo:
-        try:
-            return service.set_home_assistant_settings(body)
-        except UnknownLocationError as exc:
-            raise _unknown_location(exc) from exc
+        return service.add_ha_instance(body)
 
-    @app.delete(
-        "/api/observation-sources/home-assistant",
+    @app.put(
+        "/api/observation-sources/home-assistant/instances/{instance_id}",
         response_model=ObservationSourcesInfo,
         dependencies=protected,
     )
-    async def delete_home_assistant_settings(
+    async def update_home_assistant_instance(
+        instance_id: str,
+        body: HomeAssistantInstanceIn,
         service: WeatherService = Depends(get_service),
     ) -> ObservationSourcesInfo:
-        return service.delete_home_assistant_settings()
+        return _guard_measurements(service.update_ha_instance, instance_id, body)
+
+    @app.delete(
+        "/api/observation-sources/home-assistant/instances/{instance_id}",
+        response_model=ObservationSourcesInfo,
+        dependencies=protected,
+    )
+    async def delete_home_assistant_instance(
+        instance_id: str, service: WeatherService = Depends(get_service)
+    ) -> ObservationSourcesInfo:
+        return _guard_measurements(service.delete_ha_instance, instance_id)
+
+    @app.post(
+        "/api/observation-sources/home-assistant/measurements",
+        response_model=ObservationSourcesInfo,
+        status_code=status.HTTP_201_CREATED,
+        dependencies=protected,
+    )
+    async def add_measurement(
+        body: MeasurementIn, service: WeatherService = Depends(get_service)
+    ) -> ObservationSourcesInfo:
+        return _guard_measurements(service.add_measurement, body)
+
+    @app.put(
+        "/api/observation-sources/home-assistant/measurements/{measurement_id}",
+        response_model=ObservationSourcesInfo,
+        dependencies=protected,
+    )
+    async def update_measurement(
+        measurement_id: int,
+        body: MeasurementIn,
+        service: WeatherService = Depends(get_service),
+    ) -> ObservationSourcesInfo:
+        return _guard_measurements(service.update_measurement, measurement_id, body)
+
+    @app.delete(
+        "/api/observation-sources/home-assistant/measurements/{measurement_id}",
+        response_model=ObservationSourcesInfo,
+        dependencies=protected,
+    )
+    async def delete_measurement(
+        measurement_id: int, service: WeatherService = Depends(get_service)
+    ) -> ObservationSourcesInfo:
+        return _guard_measurements(service.delete_measurement, measurement_id)
 
     @app.put(
         "/api/observation-sources/elasticsearch",
@@ -325,6 +409,16 @@ def create_app(
         location_id: str, service: WeatherService = Depends(get_service)
     ) -> LocationForecast:
         return await _guard(service.refresh(location_id))
+
+    @app.get(
+        "/api/history/{location_id}",
+        response_model=ForecastHistory,
+        dependencies=protected,
+    )
+    async def history(
+        location_id: str, service: WeatherService = Depends(get_service)
+    ) -> ForecastHistory:
+        return await _guard(service.history(location_id))
 
     @app.get(
         "/api/ranking/{location_id}",
@@ -417,6 +511,30 @@ def _unknown_source(exc: UnknownSourceError) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown source '{exc}'"
     )
+
+
+def _conflict(exc: ConflictError) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+
+def _guard_measurements(function, *args):
+    """Map the Home Assistant instance/measurement errors onto HTTP codes."""
+    try:
+        return function(*args)
+    except UnknownLocationError as exc:
+        raise _unknown_location(exc) from exc
+    except UnknownInstanceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown Home Assistant instance '{exc}'",
+        ) from exc
+    except UnknownMeasurementError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown measurement '{exc}'",
+        ) from exc
+    except ConflictError as exc:
+        raise _conflict(exc) from exc
 
 
 async def _guard(awaitable):

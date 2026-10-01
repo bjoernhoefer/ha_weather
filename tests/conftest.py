@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timedelta, timezone
 from typing import List
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
 
-from app.clock import today_utc
+from app.clock import now_utc, today_utc
 from app.config import Location, Settings
 from app.service import WeatherService
 from app.storage import Storage
@@ -184,6 +185,50 @@ def soil_payload(start: date, count: int = 2) -> dict:
     return {"hourly": {"time": times, "soil_moisture_3_to_9cm": values}}
 
 
+def hourly_observation_payload(today: date) -> dict:
+    """Open-Meteo ``past_days=1`` hourly block in UTC (yesterday + today)."""
+    start = datetime(today.year, today.month, today.day) - timedelta(days=1)
+    stamps = [(start + timedelta(hours=index)) for index in range(48)]
+    return {
+        "hourly": {
+            "time": [stamp.strftime("%Y-%m-%dT%H:%M") for stamp in stamps],
+            "temperature_2m": [15.0 for _ in stamps],
+            "precipitation": [0.0 for _ in stamps],
+            "wind_speed_10m": [10.0 for _ in stamps],
+            "weather_code": [3 for _ in stamps],
+        }
+    }
+
+
+def hourly_forecast_payload(timezone_name: str) -> dict:
+    """Open-Meteo hourly forecast block (local time stamps) for 48 hours,
+    starting two hours ago so there are always past and future hours."""
+    local_now = now_utc().astimezone(ZoneInfo(timezone_name))
+    start = local_now.replace(minute=0, second=0, microsecond=0, tzinfo=None) - timedelta(
+        hours=2
+    )
+    stamps = [(start + timedelta(hours=index)) for index in range(48)]
+    return {
+        "hourly": {
+            "time": [stamp.strftime("%Y-%m-%dT%H:%M") for stamp in stamps],
+            "temperature_2m": [12.0 + (index % 24) / 4 for index in range(48)],
+            "precipitation": [0.1 for _ in stamps],
+            "wind_speed_10m": [8.0 for _ in stamps],
+            "weather_code": [3 for _ in stamps],
+        }
+    }
+
+
+GEOCODING_RESULTS = {
+    "Graz": {
+        "name": "Graz",
+        "latitude": 47.06667,
+        "longitude": 15.45,
+        "timezone": "Europe/Vienna",
+    }
+}
+
+
 def mock_transport(today: date) -> httpx.MockTransport:
     """Answer every outgoing request with a deterministic payload."""
 
@@ -224,7 +269,22 @@ def mock_transport(today: date) -> httpx.MockTransport:
             )
         if host == "api.weatherapi.com":
             return httpx.Response(404, json={"error": "no api key"})
+        if host == "geocoding-api.open-meteo.com":
+            found = GEOCODING_RESULTS.get(request.url.params.get("name", ""))
+            return httpx.Response(200, json={"results": [found]} if found else {})
         if host == "api.open-meteo.com":
+            if request.url.params.get("timezone") == "auto":
+                return httpx.Response(200, json={"timezone": "Europe/Madrid"})
+            hourly = request.url.params.get("hourly", "")
+            if "past_days" in request.url.params and hourly:
+                return httpx.Response(200, json=hourly_observation_payload(today))
+            if "temperature_2m" in hourly:
+                return httpx.Response(
+                    200,
+                    json=hourly_forecast_payload(
+                        request.url.params.get("timezone") or "UTC"
+                    ),
+                )
             if "et0_fao_evapotranspiration" in request.url.params.get("daily", ""):
                 return httpx.Response(200, json=agro_payload(today))
             if "hourly" in request.url.params:

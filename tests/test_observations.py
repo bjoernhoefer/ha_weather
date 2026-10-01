@@ -10,7 +10,7 @@ from app.models import Observation
 from app.observations import fetch_observations
 from app.obs_sources import build_sources, registered_sources
 from app.obs_sources.elasticsearch import observations_from_aggregation
-from app.obs_sources.home_assistant import observations_from_history
+from app.obs_sources.home_assistant import AUTH_SCHEME, observations_from_history
 
 VIENNA = Location(
     id="vienna",
@@ -237,3 +237,76 @@ async def test_fetch_observations_merges_enabled_sources(today):
     scopes = {(item.scope, item.source) for item in observations}
     assert ("outdoor", "open_meteo") in scopes
     assert ("indoor", "home_assistant") in scopes
+
+
+async def test_home_assistant_reads_every_instance_and_survives_a_failing_one(today):
+    settings = Settings(
+        database_path=":memory:",
+        observation_sources=["home_assistant"],
+        home_assistant_instances=[
+            {"id": "home", "name": "Home", "url": "http://home.local:8123", "token": "t1"},
+            {"id": "cabin", "name": "Cabin", "url": "http://cabin.local:8123", "token": "t2"},
+            {"id": "broken", "name": "Broken", "url": "http://broken.local", "token": "t3"},
+            {"id": "no_token", "name": "No token", "url": "http://no-token.local"},
+        ],
+        home_assistant_measurements=[
+            {"instance_id": "home", "location_id": "vienna", "entity_id": "sensor.garden"},
+            {"instance_id": "cabin", "location_id": "vienna", "entity_id": "sensor.porch"},
+            {"instance_id": "broken", "location_id": "vienna", "entity_id": "sensor.x"},
+            {"instance_id": "no_token", "location_id": "vienna", "entity_id": "sensor.y"},
+            {"instance_id": "home", "location_id": "porto_cristo", "entity_id": "sensor.z"},
+        ],
+    )
+    yesterday = today - timedelta(days=1)
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(
+            (
+                request.url.host,
+                request.headers["Authorization"],
+                request.url.params["filter_entity_id"],
+            )
+        )
+        if request.url.host == "broken.local":
+            return httpx.Response(500)
+        value = "12.0" if request.url.host == "home.local" else "18.0"
+        return httpx.Response(
+            200,
+            json=[[{"state": value, "last_changed": f"{yesterday.isoformat()}T10:00:00+00:00"}]],
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        observations = await fetch_observations(client, settings, VIENNA)
+
+    assert sorted(seen) == [
+        ("broken.local", f"{AUTH_SCHEME} t3", "sensor.x"),
+        ("cabin.local", f"{AUTH_SCHEME} t2", "sensor.porch"),
+        ("home.local", f"{AUTH_SCHEME} t1", "sensor.garden"),
+    ]
+    day = {item.target_date: item for item in observations}[yesterday]
+    assert (day.temperature_min, day.temperature_max, day.scope) == (12.0, 18.0, "outdoor")
+
+
+def test_home_assistant_hourly_means_carry_values_forward():
+    from datetime import datetime, timezone
+
+    from app.obs_sources.home_assistant import hourly_means
+
+    start = datetime(2024, 1, 1, 0, tzinfo=timezone.utc)
+    end = datetime(2024, 1, 1, 4, tzinfo=timezone.utc)
+    history = [
+        [
+            {"state": "10.0", "last_changed": "2023-12-31T23:00:00+00:00"},
+            {"state": "14.0", "last_changed": "2024-01-01T01:30:00+00:00"},
+            {"state": "unavailable", "last_changed": "2024-01-01T02:10:00+00:00"},
+        ],
+        [{"state": "20.0", "last_changed": "2024-01-01T03:15:00+00:00"}],
+    ]
+    means = hourly_means(history, start, end)
+    assert means == {
+        start: 10.0,
+        start.replace(hour=1): 12.0,  # 10.0 carried in, 14.0 at 01:30
+        start.replace(hour=2): 14.0,
+        start.replace(hour=3): 17.0,  # 14.0 carried + 20.0 of the second sensor
+    }

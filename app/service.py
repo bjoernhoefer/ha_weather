@@ -16,7 +16,12 @@ from .clock import now_utc, today_utc
 from .config import Location, Settings
 from .models import (
     CustomSource,
+    ElasticsearchSettingsIn,
+    ElasticsearchSettingsInfo,
+    HomeAssistantSettingsIn,
+    HomeAssistantSettingsInfo,
     LocationForecast,
+    ObservationSourcesInfo,
     ProviderForecast,
     ProviderOverride,
     ProviderRanking,
@@ -26,6 +31,7 @@ from .models import (
     VerificationResult,
 )
 from .observations import fetch_observations
+from .obs_sources import registered_sources
 from .providers import WeatherProvider, build_providers, registered_providers
 from .providers.open_meteo import OpenMeteoModelProvider
 from .scoring import build_ranking, compute_scores, provider_weights
@@ -100,6 +106,140 @@ class WeatherService:
             if provider_cls.api_key_setting and stored.get(name):
                 update[provider_cls.api_key_setting] = stored[name]
         return self.settings.model_copy(update=update) if update else self.settings
+
+    def observation_settings(self) -> Settings:
+        """Settings with the Home Assistant/Elasticsearch access details
+        entered in the web UI applied, the same way :meth:`provider_settings`
+        applies UI-entered API keys: UI values win over environment ones.
+        """
+        update: Dict[str, object] = {}
+        ha_config = self.storage.observation_source_settings("home_assistant")
+        if ha_config:
+            if ha_config.get("url"):
+                update["home_assistant_url"] = ha_config["url"]
+            if ha_config.get("token"):
+                update["home_assistant_token"] = ha_config["token"]
+            if ha_config.get("indoor_entities"):
+                update["home_assistant_indoor_entities"] = ha_config["indoor_entities"]
+            if ha_config.get("outdoor_entities"):
+                update["home_assistant_outdoor_entities"] = ha_config["outdoor_entities"]
+        es_config = self.storage.observation_source_settings("elasticsearch")
+        if es_config:
+            if es_config.get("url"):
+                update["elasticsearch_url"] = es_config["url"]
+            if es_config.get("api_key"):
+                update["elasticsearch_api_key"] = es_config["api_key"]
+            if es_config.get("index"):
+                update["elasticsearch_index"] = es_config["index"]
+            if es_config.get("location_field"):
+                update["elasticsearch_location_field"] = es_config["location_field"]
+            if es_config.get("indoor_fields"):
+                update["elasticsearch_indoor_fields"] = es_config["indoor_fields"]
+            if es_config.get("outdoor_fields"):
+                update["elasticsearch_outdoor_fields"] = es_config["outdoor_fields"]
+        return self.settings.model_copy(update=update) if update else self.settings
+
+    def observation_sources_status(self) -> ObservationSourcesInfo:
+        """Current Home Assistant/Elasticsearch configuration for the UI."""
+        settings = self.observation_settings()
+        ha_config = self.storage.observation_source_settings("home_assistant") or {}
+        ha_source = registered_sources()["home_assistant"](settings)
+        ha_origin = None
+        if ha_config.get("token"):
+            ha_origin = "ui"
+        elif self.settings.home_assistant_token:
+            ha_origin = "environment"
+        home_assistant = HomeAssistantSettingsInfo(
+            configured=bool(settings.home_assistant_url and settings.home_assistant_token),
+            available=ha_source.is_available(),
+            origin=ha_origin,
+            url=settings.home_assistant_url,
+            indoor_entities=settings.home_assistant_indoor_entities,
+            outdoor_entities=settings.home_assistant_outdoor_entities,
+        )
+
+        es_config = self.storage.observation_source_settings("elasticsearch") or {}
+        es_source = registered_sources()["elasticsearch"](settings)
+        es_origin = None
+        if es_config.get("api_key"):
+            es_origin = "ui"
+        elif self.settings.elasticsearch_api_key:
+            es_origin = "environment"
+        elasticsearch = ElasticsearchSettingsInfo(
+            configured=bool(
+                settings.elasticsearch_url
+                and settings.elasticsearch_api_key
+                and settings.elasticsearch_index
+            ),
+            available=es_source.is_available(),
+            origin=es_origin,
+            url=settings.elasticsearch_url,
+            index=settings.elasticsearch_index,
+            location_field=settings.elasticsearch_location_field,
+            indoor_fields=settings.elasticsearch_indoor_fields,
+            outdoor_fields=settings.elasticsearch_outdoor_fields,
+        )
+        return ObservationSourcesInfo(home_assistant=home_assistant, elasticsearch=elasticsearch)
+
+    def set_home_assistant_settings(
+        self, settings_in: HomeAssistantSettingsIn
+    ) -> ObservationSourcesInfo:
+        self.location(settings_in.location_id)  # raises UnknownLocationError
+        config = self.storage.observation_source_settings("home_assistant") or {}
+        if settings_in.url is not None:
+            config["url"] = settings_in.url
+        if settings_in.token:
+            config["token"] = settings_in.token
+        indoor_entities = dict(config.get("indoor_entities") or {})
+        outdoor_entities = dict(config.get("outdoor_entities") or {})
+        if settings_in.indoor_entities:
+            indoor_entities[settings_in.location_id] = settings_in.indoor_entities
+        else:
+            indoor_entities.pop(settings_in.location_id, None)
+        if settings_in.outdoor_entities:
+            outdoor_entities[settings_in.location_id] = settings_in.outdoor_entities
+        else:
+            outdoor_entities.pop(settings_in.location_id, None)
+        config["indoor_entities"] = indoor_entities
+        config["outdoor_entities"] = outdoor_entities
+        self.storage.set_observation_source_settings("home_assistant", config)
+        return self.observation_sources_status()
+
+    def delete_home_assistant_settings(self) -> ObservationSourcesInfo:
+        self.storage.delete_observation_source_settings("home_assistant")
+        return self.observation_sources_status()
+
+    def set_elasticsearch_settings(
+        self, settings_in: ElasticsearchSettingsIn
+    ) -> ObservationSourcesInfo:
+        self.location(settings_in.location_id)  # raises UnknownLocationError
+        config = self.storage.observation_source_settings("elasticsearch") or {}
+        if settings_in.url is not None:
+            config["url"] = settings_in.url
+        if settings_in.api_key:
+            config["api_key"] = settings_in.api_key
+        if settings_in.index is not None:
+            config["index"] = settings_in.index
+        if settings_in.location_field:
+            config["location_field"] = settings_in.location_field
+        indoor_fields = dict(config.get("indoor_fields") or {})
+        outdoor_fields = dict(config.get("outdoor_fields") or {})
+        if settings_in.indoor_field:
+            indoor_fields[settings_in.location_id] = settings_in.indoor_field
+        else:
+            indoor_fields.pop(settings_in.location_id, None)
+        if settings_in.outdoor_field:
+            outdoor_fields[settings_in.location_id] = settings_in.outdoor_field
+        else:
+            outdoor_fields.pop(settings_in.location_id, None)
+        config["indoor_fields"] = indoor_fields
+        config["outdoor_fields"] = outdoor_fields
+        self.storage.set_observation_source_settings("elasticsearch", config)
+        return self.observation_sources_status()
+
+    def delete_elasticsearch_settings(self) -> ObservationSourcesInfo:
+        self.storage.delete_observation_source_settings("elasticsearch")
+        return self.observation_sources_status()
 
     def reload_providers(self) -> None:
         """Rebuild the active provider list after a source control change."""
@@ -260,7 +400,9 @@ class WeatherService:
                 ),
             )
             try:
-                observations = await fetch_observations(client, self.settings, location)
+                observations = await fetch_observations(
+                    client, self.observation_settings(), location
+                )
             except Exception as exc:  # noqa: BLE001 - scoring may lag behind
                 LOGGER.warning("observation update failed for %s: %s", location_id, exc)
                 observations = []

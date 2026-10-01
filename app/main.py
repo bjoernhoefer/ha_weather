@@ -17,7 +17,10 @@ from .auth import require_api_key
 from .config import Location, Settings, get_settings
 from .models import (
     CustomSource,
+    ElasticsearchSettingsIn,
+    HomeAssistantSettingsIn,
     LocationForecast,
+    ObservationSourcesInfo,
     ProviderOverride,
     ProviderRanking,
     SeasonInfo,
@@ -244,6 +247,62 @@ def create_app(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT, detail=str(exc)
             ) from exc
+
+    @app.get(
+        "/api/observation-sources",
+        response_model=ObservationSourcesInfo,
+        dependencies=protected,
+    )
+    async def observation_sources(
+        service: WeatherService = Depends(get_service),
+    ) -> ObservationSourcesInfo:
+        return service.observation_sources_status()
+
+    @app.put(
+        "/api/observation-sources/home-assistant",
+        response_model=ObservationSourcesInfo,
+        dependencies=protected,
+    )
+    async def set_home_assistant_settings(
+        body: HomeAssistantSettingsIn, service: WeatherService = Depends(get_service)
+    ) -> ObservationSourcesInfo:
+        try:
+            return service.set_home_assistant_settings(body)
+        except UnknownLocationError as exc:
+            raise _unknown_location(exc) from exc
+
+    @app.delete(
+        "/api/observation-sources/home-assistant",
+        response_model=ObservationSourcesInfo,
+        dependencies=protected,
+    )
+    async def delete_home_assistant_settings(
+        service: WeatherService = Depends(get_service),
+    ) -> ObservationSourcesInfo:
+        return service.delete_home_assistant_settings()
+
+    @app.put(
+        "/api/observation-sources/elasticsearch",
+        response_model=ObservationSourcesInfo,
+        dependencies=protected,
+    )
+    async def set_elasticsearch_settings(
+        body: ElasticsearchSettingsIn, service: WeatherService = Depends(get_service)
+    ) -> ObservationSourcesInfo:
+        try:
+            return service.set_elasticsearch_settings(body)
+        except UnknownLocationError as exc:
+            raise _unknown_location(exc) from exc
+
+    @app.delete(
+        "/api/observation-sources/elasticsearch",
+        response_model=ObservationSourcesInfo,
+        dependencies=protected,
+    )
+    async def delete_elasticsearch_settings(
+        service: WeatherService = Depends(get_service),
+    ) -> ObservationSourcesInfo:
+        return service.delete_elasticsearch_settings()
 
     @app.get(
         "/api/forecast/{location_id}",

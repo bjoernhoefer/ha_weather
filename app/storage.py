@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
 from datetime import date, timedelta
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .clock import today_utc
 from .models import CustomSource, Observation, ProviderForecast, ProviderOverride
@@ -56,6 +57,10 @@ CREATE TABLE IF NOT EXISTS custom_sources (
     name TEXT PRIMARY KEY,
     model TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS observation_source_settings (
+    source TEXT PRIMARY KEY,
+    config TEXT NOT NULL
 );
 """
 
@@ -424,6 +429,43 @@ class Storage:
             )
             for row in rows
         ]
+
+    # ------------------------------------------------------------------
+    # observation source settings (Home Assistant / Elasticsearch access
+    # details entered in the web UI)
+    # ------------------------------------------------------------------
+    def set_observation_source_settings(self, source: str, config: Dict[str, Any]) -> None:
+        """Persist the access details for an :class:`ObservationSource`.
+
+        ``config`` is stored as JSON so it can hold arbitrary nested data
+        (e.g. the per-location entity/field mappings) without a schema
+        migration for every new setting.
+        """
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO observation_source_settings (source, config) VALUES (?, ?)
+                ON CONFLICT (source) DO UPDATE SET config=excluded.config
+                """,
+                (source, json.dumps(config)),
+            )
+            self._connection.commit()
+
+    def delete_observation_source_settings(self, source: str) -> bool:
+        with self._lock:
+            cursor = self._connection.execute(
+                "DELETE FROM observation_source_settings WHERE source = ?", (source,)
+            )
+            self._connection.commit()
+        return cursor.rowcount > 0
+
+    def observation_source_settings(self, source: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT config FROM observation_source_settings WHERE source = ?",
+                (source,),
+            ).fetchone()
+        return json.loads(row["config"]) if row else None
 
     # ------------------------------------------------------------------
     def purge_older_than(self, days: int) -> int:

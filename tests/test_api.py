@@ -48,7 +48,7 @@ def test_help_and_version_history_are_served(api):
     assert 'fetch("/static/version.json")' in help_page.text
 
     release = api.get("/static/version.json").json()
-    assert release["version"] == "1.0"
+    assert release["version"] == "1.1"
     assert release["history"][0]["version"] == release["version"]
     assert release["history"][0]["description"]
     assert api.get("/openapi.json").json()["info"]["version"] == release["version"]

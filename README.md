@@ -75,7 +75,7 @@ version history.
 The current version and its history are kept in
 [`app/static/version.json`](app/static/version.json). The help page reads this
 file, and FastAPI uses its `version` field for the OpenAPI metadata. This is
-version **1.0**. For each subsequent change, propose a new version number and
+version **1.1**. For each subsequent change, propose a new version number and
 a one- or two-sentence release description in the pull request. When releasing,
 set `version` to the proposed number and prepend a matching dated entry to
 `history` (newest first). Use a minor version for new functionality and a

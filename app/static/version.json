@@ -1,6 +1,11 @@
 {
-  "version": "1.0",
+  "version": "1.1",
   "history": [
+    {
+      "version": "1.1",
+      "date": "2026-10-02",
+      "description": "Added provider-specific Explain history showing archived forecasts, outdoor measurements, and the accuracy behind provider rankings."
+    },
     {
       "version": "1.0",
       "date": "2026-10-01",

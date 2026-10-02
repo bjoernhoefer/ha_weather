@@ -32,6 +32,7 @@
       .good { color: #0a7; }
       form.bar { margin-top: .8rem; }
       td .bar { flex-wrap: nowrap; }
+      #providerExplanation { margin-top: 1rem; }
     </style>
   </head>
   <body>
@@ -126,6 +127,28 @@
         </thead>
         <tbody id="ranking"></tbody>
       </table>
+      <section id="providerExplanation" hidden aria-labelledby="providerExplanationTitle">
+        <div class="bar">
+          <h3 id="providerExplanationTitle" tabindex="-1">Provider accuracy</h3>
+          <button type="button" id="closeExplanation">Close</button>
+        </div>
+        <p id="providerExplanationSummary" role="status"></p>
+        <p class="muted">
+          Archived forecasts for the past 30 days, compared with outdoor measurements.
+          Each forecast made at least a day ahead is counted separately. Temperature MAE
+          averages available minimum and maximum errors; rain error is absolute.
+          The automatic score deducts 8 points per K and 4 points per mm from 100.
+        </p>
+        <table>
+          <thead>
+            <tr><th>Date</th><th>Forecast issued</th><th>Lead days</th>
+              <th>Min predicted / measured &deg;C</th><th>Max predicted / measured &deg;C</th>
+              <th>Temp MAE (K)</th><th>Rain predicted / measured mm</th>
+              <th>Rain error (mm)</th><th>Score</th><th>Measured by</th></tr>
+          </thead>
+          <tbody id="providerExplanationDays"></tbody>
+        </table>
+      </section>
     </details>
 
     <details class="fold" id="sourcesSection">
@@ -341,7 +364,63 @@
         return td;
       }
 
+      let explanationRequest = 0;
+      function closeExplanation() {
+        explanationRequest++;
+        $("providerExplanation").hidden = true;
+        $("providerExplanationDays").textContent = "";
+      }
+      $("closeExplanation").addEventListener("click", closeExplanation);
+
+      async function explainProvider(locationId, provider, listName) {
+        const request = ++explanationRequest;
+        const panel = $("providerExplanation");
+        panel.hidden = false;
+        $("providerExplanationTitle").textContent = `${provider} – accuracy history`;
+        $("providerExplanationTitle").focus();
+        $("providerExplanationDays").textContent = "";
+        $("providerExplanationSummary").textContent = "Loading…";
+        try {
+          const explanation = await api(
+            `/api/ranking/${encodeURIComponent(locationId)}/${encodeURIComponent(provider)}/explain`
+          );
+          if (request !== explanationRequest || $("location").value !== locationId) return;
+          const score = explanation.score;
+          const override = !score.enabled ? " Disabled manually."
+            : score.manual_rank !== null ? ` Manual rank: ${score.manual_rank}.` : "";
+          $("providerExplanationSummary").textContent = score.samples
+            ? `${listName}: automatic score ${fmt(score.score, 2)}/100 from ${score.samples} verified forecast(s); ` +
+              `temperature MAE ${fmt(score.temperature_mae, 2) ?? "–"} K, ` +
+              `rain MAE ${fmt(score.precipitation_mae, 2) ?? "–"} mm.${override}`
+            : `${listName}: no verified forecasts yet; automatic ranking uses a neutral score of 50.${override}`;
+          const body = $("providerExplanationDays");
+          explanation.days.forEach((day) => {
+            const row = document.createElement("tr");
+            cell(row, day.target_date);
+            cell(row, new Date(day.issued_at).toLocaleString());
+            cell(row, day.lead_days);
+            cell(row, `${day.predicted_temperature_min ?? "–"} / ${day.measured_temperature_min ?? "–"}`);
+            cell(row, `${day.predicted_temperature_max ?? "–"} / ${day.measured_temperature_max ?? "–"}`);
+            cell(row, fmt(day.temperature_mae));
+            cell(row, `${day.predicted_precipitation_mm ?? "–"} / ${day.measured_precipitation_mm ?? "–"}`);
+            cell(row, fmt(day.precipitation_error));
+            cell(row, fmt(day.score, 2));
+            cell(row, day.observation_source);
+            body.appendChild(row);
+          });
+          if (!explanation.days.length) {
+            const row = document.createElement("tr");
+            const empty = cell(row, "No archived provider forecasts for the past 30 days.");
+            empty.colSpan = 10;
+            body.appendChild(row);
+          }
+        } catch (error) {
+          if (request === explanationRequest) $("providerExplanationSummary").textContent = error.message;
+        }
+      }
+
       function renderRanking(locationId, ranking) {
+        closeExplanation();
         const body = $("ranking");
         body.textContent = "";
         const render = (entry, listName) => {
@@ -395,7 +474,9 @@
             } catch (error) { setStatus(error.message); }
           });
           const actions = document.createElement("td");
-          actions.append(save, reset);
+          const explain = button("Explain", () => explainProvider(locationId, entry.provider, listName));
+          explain.setAttribute("aria-label", `Explain ranking for ${entry.provider}`);
+          actions.append(save, reset, explain);
           row.appendChild(actions);
           body.appendChild(row);
         };
@@ -1090,6 +1171,7 @@
       });
 
       async function locationChanged() {
+        closeExplanation();
         if (observationSources) renderObservationSources(observationSources);
         if (!editingMeasurement) $("measurementLocation").value = $("location").value;
         if (!editingEsMeasurement) $("esMeasurementLocation").value = $("location").value;

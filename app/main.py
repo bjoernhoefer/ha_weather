@@ -26,6 +26,7 @@ from .models import (
     LocationInfo,
     MeasurementIn,
     ObservationSourcesInfo,
+    ProviderExplanation,
     ProviderOverride,
     ProviderRanking,
     SeasonInfo,
@@ -486,6 +487,24 @@ def create_app(
             return service.ranking(location_id)
         except UnknownLocationError as exc:
             raise _unknown_location(exc) from exc
+
+    @app.get(
+        "/api/ranking/{location_id}/{provider}/explain",
+        response_model=ProviderExplanation,
+        dependencies=protected,
+    )
+    async def explain_provider(
+        location_id: str, provider: str, service: WeatherService = Depends(get_service)
+    ) -> ProviderExplanation:
+        try:
+            return service.explain_provider(location_id, provider)
+        except UnknownLocationError as exc:
+            raise _unknown_location(exc) from exc
+        except UnknownSourceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Unknown provider '{provider}'",
+            ) from exc
 
     @app.put(
         "/api/ranking/{location_id}/{provider}",

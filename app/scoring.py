@@ -7,7 +7,13 @@ from datetime import date, timedelta
 from typing import Dict, List, Optional
 
 from .clock import now_utc, today_utc
-from .models import Observation, ProviderOverride, ProviderRanking, ProviderScore
+from .models import (
+    Observation,
+    ProviderHistoryDay,
+    ProviderOverride,
+    ProviderRanking,
+    ProviderScore,
+)
 from .storage import Storage, forecast_rows_by_provider
 
 #: 1 K of temperature error costs 8 points, 1 mm of rain error costs 4 points.
@@ -98,6 +104,56 @@ def compute_scores(
             )
         )
     return scores
+
+
+def provider_history(
+    location_id: str, provider: str, storage: Storage, lookback_days: int = 30
+) -> List[ProviderHistoryDay]:
+    """Show the same archived forecasts and outdoor measurements used in scoring."""
+    since = today_utc() - timedelta(days=lookback_days)
+    observations = storage.observations(location_id, since)
+    rows = storage.forecast_history(location_id, since)
+    days = []
+    for row in rows:
+        if row["provider"] != provider:
+            continue
+        target_date = date.fromisoformat(row["target_date"])
+        observation = observations.get(target_date)
+        temperature_errors = [
+            abs(row[key] - getattr(observation, key))
+            for key in ("temperature_min", "temperature_max")
+            if observation is not None
+            and row[key] is not None
+            and getattr(observation, key) is not None
+        ]
+        precipitation_error = (
+            abs(row["precipitation_mm"] - observation.precipitation_mm)
+            if observation is not None
+            and row["precipitation_mm"] is not None
+            and observation.precipitation_mm is not None
+            else None
+        )
+        temperature_mae = _mean(temperature_errors)
+        days.append(
+            ProviderHistoryDay(
+                target_date=target_date,
+                issued_at=row["issued_at"],
+                lead_days=row["lead_days"],
+                predicted_temperature_min=row["temperature_min"],
+                measured_temperature_min=observation.temperature_min if observation else None,
+                predicted_temperature_max=row["temperature_max"],
+                measured_temperature_max=observation.temperature_max if observation else None,
+                temperature_mae=round(temperature_mae, 2) if temperature_mae is not None else None,
+                predicted_precipitation_mm=row["precipitation_mm"],
+                measured_precipitation_mm=observation.precipitation_mm if observation else None,
+                precipitation_error=(
+                    round(precipitation_error, 2) if precipitation_error is not None else None
+                ),
+                score=score_from_errors(temperature_mae, precipitation_error),
+                observation_source=observation.source if observation else None,
+            )
+        )
+    return sorted(days, key=lambda day: (day.target_date, day.issued_at), reverse=True)
 
 
 def effective_score(score: ProviderScore) -> float:

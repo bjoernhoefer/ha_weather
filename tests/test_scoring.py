@@ -12,7 +12,13 @@ from app.models import (
     ProviderOverride,
     ProviderScore,
 )
-from app.scoring import build_ranking, compute_scores, provider_weights, score_from_errors
+from app.scoring import (
+    build_ranking,
+    compute_scores,
+    provider_history,
+    provider_weights,
+    score_from_errors,
+)
 
 
 def _forecast(provider: str, target: date, temp_max: float, precip: float):
@@ -67,6 +73,49 @@ def test_compute_scores_ranks_the_accurate_provider_higher(seeded):
     assert scores["good"].score > scores["bad"].score
 
 
+def test_provider_history_matches_score_and_excludes_other_providers(seeded):
+    yesterday = today_utc() - timedelta(days=1)
+    days = provider_history("vienna", "bad", seeded)
+    assert len(days) == 1
+    day = days[0]
+    assert day.target_date == yesterday
+    assert day.lead_days == 1
+    assert day.predicted_temperature_min == 18.0
+    assert day.measured_temperature_min == 12.0
+    assert day.temperature_mae == 6.0
+    assert day.precipitation_error == 8.0
+    score = next(item for item in compute_scores("vienna", seeded) if item.provider == "bad")
+    assert day.score == score.score
+
+
+def test_provider_history_shows_unverified_forecasts_without_scoring(storage):
+    yesterday = today_utc() - timedelta(days=1)
+    storage.save_forecast(_forecast("good", yesterday, 20.0, 1.0))
+    day = provider_history("vienna", "good", storage)[0]
+    assert day.measured_temperature_min is None
+    assert day.temperature_mae is None
+    assert day.precipitation_error is None
+    assert day.score is None
+    assert compute_scores("vienna", storage)[0].samples == 0
+
+
+def test_provider_history_uses_available_outdoor_fields_only(storage):
+    yesterday = today_utc() - timedelta(days=1)
+    storage.save_forecast(_forecast("good", yesterday, 20.0, 1.0))
+    storage.save_observations([
+        Observation(location_id="vienna", target_date=yesterday,
+                    temperature_max=19.0, source="outdoor"),
+        Observation(location_id="vienna", target_date=yesterday,
+                    temperature_max=100.0, scope="indoor", source="indoor"),
+    ])
+    day = provider_history("vienna", "good", storage)[0]
+    assert day.temperature_mae == 1.0
+    assert day.precipitation_error is None
+    assert day.score == 92.0
+    assert day.observation_source == "outdoor"
+    assert day.measured_temperature_max == 19.0
+
+
 def test_today_and_same_day_forecasts_are_not_scored(storage):
     today = today_utc()
     storage.save_forecast(_forecast("good", today, 20.0, 1.0))
@@ -80,6 +129,7 @@ def test_today_and_same_day_forecasts_are_not_scored(storage):
         ]
     )
     assert compute_scores("vienna", storage) == []
+    assert provider_history("vienna", "good", storage) == []
 
 
 def test_build_ranking_splits_top_and_low(seeded):

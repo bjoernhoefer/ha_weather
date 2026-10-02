@@ -5,7 +5,16 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
-from app.models import MAX_ENTITIES_PER_LOCATION, MAX_ENTITY_LENGTH, MAX_SETTING_LENGTH
+from app.models import (
+    MAX_ENTITIES_PER_LOCATION,
+    MAX_ENTITY_LENGTH,
+    MAX_SETTING_LENGTH,
+    DailyForecast,
+    Observation,
+    ProviderForecast,
+)
+from app.clock import today_utc
+from datetime import datetime, timedelta, timezone
 from app.service import WeatherService
 from app.storage import Storage
 
@@ -39,7 +48,7 @@ def test_help_and_version_history_are_served(api):
     assert 'fetch("/static/version.json")' in help_page.text
 
     release = api.get("/static/version.json").json()
-    assert release["version"] == "1.0"
+    assert release["version"] == "1.1"
     assert release["history"][0]["version"] == release["version"]
     assert release["history"][0]["description"]
     assert api.get("/openapi.json").json()["info"]["version"] == release["version"]
@@ -65,6 +74,7 @@ def test_forecast_endpoint_returns_consensus_and_season(api):
 def test_unknown_location_returns_404(api):
     assert api.get("/api/forecast/atlantis").status_code == 404
     assert api.get("/api/ranking/atlantis").status_code == 404
+    assert api.get("/api/ranking/atlantis/met_no/explain").status_code == 404
     assert api.get("/api/season/atlantis").status_code == 404
 
 
@@ -95,6 +105,42 @@ def test_manual_override_round_trip(api):
         for entry in reset["top"] + reset["low"]
         if entry["provider"] == "met_no"
     )
+
+
+def test_explain_provider_returns_accuracy_and_override(api, storage):
+    yesterday = today_utc() - timedelta(days=1)
+    storage.save_forecast(ProviderForecast(
+        provider="met_no", location_id="vienna",
+        issued_at=datetime.combine(yesterday - timedelta(days=1),
+                                   datetime.min.time(), tzinfo=timezone.utc),
+        days=[DailyForecast(target_date=yesterday, temperature_min=10,
+                            temperature_max=20, precipitation_mm=2)],
+    ))
+    storage.save_observations([
+        Observation(location_id="vienna", target_date=yesterday,
+                    temperature_min=11, temperature_max=19,
+                    precipitation_mm=3, source="open_meteo")
+    ])
+    api.put("/api/ranking/vienna/met_no", json={"manual_rank": 1, "enabled": False})
+    response = api.get("/api/ranking/vienna/met_no/explain")
+    assert response.status_code == 200
+    explanation = response.json()
+    assert explanation["score"]["manual_rank"] == 1
+    assert explanation["score"]["enabled"] is False
+    assert explanation["score"]["samples"] == 1
+    assert explanation["score"]["score"] == 88.0
+    assert len(explanation["days"]) == 1
+    assert explanation["days"][0]["temperature_mae"] == 1.0
+    assert explanation["days"][0]["precipitation_error"] == 1.0
+    assert explanation["days"][0]["observation_source"] == "open_meteo"
+
+
+def test_explain_provider_with_no_history_and_unknown_provider(api):
+    response = api.get("/api/ranking/vienna/met_no/explain")
+    assert response.status_code == 200
+    assert response.json()["days"] == []
+    assert response.json()["score"]["score"] is None
+    assert api.get("/api/ranking/vienna/not_a_provider/explain").status_code == 404
 
 
 def test_override_for_unknown_provider_is_rejected(api):

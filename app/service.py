@@ -48,6 +48,7 @@ from .models import (
     MeasurementInfo,
     ObservationSourcesInfo,
     ProviderForecast,
+    ProviderExplanation,
     ProviderOverride,
     ProviderRanking,
     ProviderScore,
@@ -66,7 +67,7 @@ from .obs_sources.home_assistant import (
 from .obs_sources.open_meteo import fetch_hourly_observations
 from .providers import WeatherProvider, build_providers, registered_providers
 from .providers.open_meteo import OpenMeteoModelProvider
-from .scoring import build_ranking, compute_scores, provider_weights
+from .scoring import build_ranking, compute_scores, provider_history, provider_weights
 from .seasons import build_season_info
 from .storage import Storage
 
@@ -817,6 +818,15 @@ class WeatherService:
     def ranking(self, location_id: str) -> ProviderRanking:
         self.location(location_id)
         return build_ranking(location_id, self.scores(location_id))
+
+    def explain_provider(self, location_id: str, provider: str) -> ProviderExplanation:
+        scores = self.scores(location_id)
+        score = next((item for item in scores if item.provider == provider), None)
+        if score is None:
+            raise UnknownSourceError(provider)
+        return ProviderExplanation(
+            score=score, days=provider_history(location_id, provider, self.storage)
+        )
 
     # ------------------------------------------------------------------
     async def refresh(self, location_id: str) -> LocationForecast:

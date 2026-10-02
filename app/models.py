@@ -87,6 +87,31 @@ class ProviderRanking(BaseModel):
     low: List[ProviderScore] = Field(default_factory=list)
 
 
+class ProviderHistoryDay(BaseModel):
+    """One archived provider forecast compared with outdoor observations."""
+
+    target_date: date
+    issued_at: datetime
+    lead_days: int
+    predicted_temperature_min: Optional[float] = None
+    measured_temperature_min: Optional[float] = None
+    predicted_temperature_max: Optional[float] = None
+    measured_temperature_max: Optional[float] = None
+    temperature_mae: Optional[float] = None
+    predicted_precipitation_mm: Optional[float] = None
+    measured_precipitation_mm: Optional[float] = None
+    precipitation_error: Optional[float] = None
+    score: Optional[float] = None
+    observation_source: Optional[str] = None
+
+
+class ProviderExplanation(BaseModel):
+    """Accuracy evidence behind a provider's current ranking."""
+
+    score: ProviderScore
+    days: List[ProviderHistoryDay] = Field(default_factory=list)
+
+
 class ProviderOverride(BaseModel):
     """Manual, UI editable correction of the automatic ranking."""
 

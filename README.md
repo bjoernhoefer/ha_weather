@@ -85,19 +85,52 @@ The Compose file pulls the published image from GHCR. For local changes, build
 it yourself with `docker build -t ghcr.io/bjoernhoefer/ha_weather:latest .`
 before running `docker compose up -d`.
 
-### Automatic Docker updates
+### Continuous deployment rollout
 
-After CI succeeds on `main`, GitHub Actions publishes `linux/amd64` and
+After CI succeeds for a push to `main`, GitHub Actions publishes `linux/amd64` and
 `linux/arm64` images as `ghcr.io/bjoernhoefer/ha_weather:latest` and a
-commit-specific tag. The first package must be made **public** in GitHub's
+commit-specific tag, then passes the immutable image digest to the deploy job.
+The first package must be made **public** in GitHub's
 package settings (packages are private by default) so hosts can pull it
-without registry credentials. The server at `192.168.188.13` uses
-`docker-compose.host.yml`, which retains port 6070 and the persistent
-`ha_weather_data` volume. Its existing Watchtower checks for new images daily
-at 04:00 and restarts the container when `latest` changes. Deploy the first
-image with `docker compose -f docker-compose.host.yml pull ha_weather` and
-`docker compose -f docker-compose.host.yml up -d --no-deps ha_weather`; no
-checkout or rebuild is needed for subsequent releases.
+without registry credentials.
+
+The deploy job runs on the Raspberry Pi at `192.168.188.13` (Debian 12,
+ARM64), using a self-hosted runner with labels `self-hosted`, `linux`,
+`ARM64`, and `deploy-weather`. Only successful CI runs for pushes to `main`
+can deploy; PRs and forks cannot. Fork PR workflows require manual approval
+before running; configure GitHub Actions to require approval for all outside
+collaborators. The host job does not check out the repository or run
+third-party actions.
+
+Before deployment, the job checks the current `main` SHA with `git ls-remote`
+and skips builds that have been superseded. Deployments are serialized in
+the `deploy-ha_weather` concurrency group without cancelling an active
+deployment, with a 20-minute job timeout. After validating the digest and
+commit SHA, the runner calls:
+
+```bash
+sudo -n -u bjoern /usr/local/bin/ha-deploy ha_weather "ghcr.io/bjoernhoefer/ha_weather@${DIGEST}" "${HEAD_SHA}"
+```
+
+The runner runs as the dedicated user `gh-deploy`, with no Docker access
+and permission to invoke only `ha-deploy` via sudo as `bjoern`.
+Host setup (runner registration, sudo policy, and the root-owned deployment
+script) is performed separately from this repository rollout.
+
+The host script uses a host-wide `flock` lock, pulls the digest-pinned image
+and tags it locally as `:latest`. It runs
+`docker compose -p ha_weather -f docker-compose.host.yml up -d --no-build --pull never --wait ha_weather`
+for only this service, waiting for its healthcheck. If that fails, it rolls
+back to the previous image and exits nonzero so the deployment is marked
+failed. The Compose project remains `ha_weather`, retaining port 6070 and
+the persistent `ha_weather_data` volume.
+
+Both Compose files disable Watchtower updates for `ha_weather` using
+`com.centurylinklabs.watchtower.enable=false`. The host's existing Watchtower
+runs without a label filter and would otherwise race with GitHub Actions
+deployments. Install the updated host Compose file and the deployment script,
+and bring the runner online before enabling the rollout; subsequent releases
+need no checkout or rebuild on the host.
 
 Without Docker:
 

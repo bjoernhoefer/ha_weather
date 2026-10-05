@@ -8,12 +8,16 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   publish:
     if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,6 +34,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: docker/build-push-action@v6
+        id: build
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -37,3 +42,50 @@ jobs:
           tags: |
             ghcr.io/bjoernhoefer/ha_weather:latest
             ghcr.io/bjoernhoefer/ha_weather:${{ github.event.workflow_run.head_sha }}
+
+  deploy:
+    needs: publish
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main'
+    runs-on: [self-hosted, linux, ARM64, deploy-weather]
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-ha_weather
+      cancel-in-progress: false
+    timeout-minutes: 20
+    steps:
+      - name: Skip if superseded
+        id: superseded
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          main_sha="$(git ls-remote --exit-code "https://github.com/${REPOSITORY}" refs/heads/main | awk '{print $1}')"
+          if [[ ! "$main_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not determine the current main SHA"
+            exit 1
+          fi
+          if [[ "$main_sha" != "$HEAD_SHA" ]]; then
+            echo "::notice::Skipping deployment: this build has been superseded on main"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy
+        if: steps.superseded.outputs.skip == 'false'
+        shell: bash
+        env:
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Invalid image digest"
+            exit 1
+          fi
+          if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid commit SHA"
+            exit 1
+          fi
+          sudo -n -u bjoern /usr/local/bin/ha-deploy ha_weather "ghcr.io/bjoernhoefer/ha_weather@${DIGEST}" "${HEAD_SHA}"

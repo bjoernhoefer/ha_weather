@@ -389,6 +389,12 @@
 
     <script>
       const $ = (id) => document.getElementById(id);
+      document.querySelectorAll(".dashboard-nav a").forEach((link) => {
+        link.addEventListener("click", () => {
+          const section = $(link.hash.slice(1));
+          if (section instanceof HTMLDetailsElement) section.open = true;
+        });
+      });
       const API_KEY_STORAGE = "ha_weather_api_key";
       const apiKeyInput = $("apiKey");
       apiKeyInput.value = localStorage.getItem(API_KEY_STORAGE) || "";

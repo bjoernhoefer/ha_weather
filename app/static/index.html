@@ -4,84 +4,147 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-    <title>ha_weather &ndash; provider ranking</title>
+    <title>ha_weather &ndash; weather overview</title>
     <style>
-      :root { color-scheme: light dark; }
-      body { font-family: system-ui, sans-serif; margin: 0; padding: 1.5rem; }
-      h1 { margin-top: 0; font-size: 1.4rem; }
-      header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
-      section { margin-bottom: 2rem; }
-      table { border-collapse: collapse; width: 100%; max-width: 70rem; }
-      th, td { border: 1px solid #8884; padding: .4rem .6rem; text-align: left; }
-      th { background: #8881; }
-      .bar { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
-      .top { color: #0a7; font-weight: 600; }
-      .low { color: #c40; font-weight: 600; }
-      .muted { opacity: .7; font-size: .9rem; }
-      button { padding: .35rem .7rem; cursor: pointer; }
+      :root {
+        color-scheme: light dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #17231e;
+        background: #f3f6f2;
+        font-synthesis: none;
+        --surface: #fff;
+        --surface-soft: #f7f9f6;
+        --border: #e1e8e0;
+        --muted: #66756d;
+        --accent: #25745a;
+        --accent-soft: #e8f3ed;
+        --shadow: 0 8px 28px #1d382312;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 2rem clamp(1rem, 4vw, 3.5rem); }
+      body > header, body > nav, body > section, body > p, body > details {
+        width: min(100%, 1440px);
+        margin-left: auto;
+        margin-right: auto;
+      }
+      header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+      h1 { margin: 0; font-size: clamp(1.45rem, 3vw, 2rem); letter-spacing: -.04em; }
+      h2 { letter-spacing: -.025em; }
+      h3 { font-size: 1.05rem; }
+      a { color: var(--accent); }
+      header nav a { color: var(--muted); text-decoration: none; font-weight: 600; }
+      body > header { margin-bottom: 1.4rem; }
+      .eyebrow { margin: 0 0 .35rem; color: var(--accent); font-size: .75rem; font-weight: 750; letter-spacing: .13em; text-transform: uppercase; }
+      .bar { display: flex; gap: .65rem; align-items: center; flex-wrap: wrap; }
+      body > section.bar { padding: 1.1rem 1.25rem; background: var(--surface); border: 1px solid var(--border); border-radius: 1rem; box-shadow: var(--shadow); }
+      label { color: var(--muted); font-size: .85rem; font-weight: 600; }
+      input, select, button {
+        min-height: 2.5rem;
+        border: 1px solid var(--border);
+        border-radius: .65rem;
+        background: var(--surface);
+        color: inherit;
+        font: inherit;
+        padding: .5rem .75rem;
+      }
       input[type="number"] { width: 5rem; }
-      #status { min-height: 1.2rem; }
-      details.fold { margin-bottom: 1rem; border: 1px solid #8884; border-radius: .4rem; padding: .3rem .8rem; max-width: 72rem; }
-      details.fold[open] { padding-bottom: .8rem; }
-      details.fold > summary { cursor: pointer; padding: .3rem 0; }
+      button { cursor: pointer; font-size: .88rem; font-weight: 650; transition: background .15s, border-color .15s, transform .15s; }
+      button:hover { border-color: #a9c8b5; background: var(--accent-soft); }
+      button:active { transform: translateY(1px); }
+      button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid #78b99a88; outline-offset: 2px; }
+      #refresh { border-color: var(--accent); background: var(--accent); color: white; }
+      #refresh:hover { background: #1d624b; }
+      #status { min-height: 1.2rem; margin-top: .75rem; }
+      .muted { color: var(--muted); font-size: .9rem; line-height: 1.55; }
+      .dashboard-nav { display: flex; gap: .4rem; overflow-x: auto; padding: 1rem 0; }
+      .dashboard-nav a { padding: .55rem .8rem; border-radius: 2rem; color: var(--muted); font-size: .88rem; font-weight: 650; text-decoration: none; white-space: nowrap; }
+      .dashboard-nav a:hover { background: var(--accent-soft); color: var(--accent); }
+      details.fold { margin: 0 auto 1rem; padding: 1.15rem 1.25rem; border: 1px solid var(--border); border-radius: 1rem; background: var(--surface); box-shadow: var(--shadow); scroll-margin-top: 1rem; }
+      details.fold[open] { padding-bottom: 1.4rem; }
+      details.fold > summary { cursor: pointer; list-style-position: outside; }
       details.fold > summary > h2, details.fold > summary > h3 { display: inline; margin: 0; }
-      details.fold > summary > h2 { font-size: 1.25rem; }
-      details.fold > summary > h3 { font-size: 1.05rem; }
-      details.sub { border-style: dashed; margin-top: .6rem; }
-      .error { color: #c40; }
-      .good { color: #0a7; }
+      details.fold > summary > h2 { font-size: 1.2rem; }
+      details.fold > summary > h3 { font-size: 1rem; }
+      details.sub { margin-top: .8rem; border-radius: .8rem; background: var(--surface-soft); box-shadow: none; }
+      details.sub[open] { padding-bottom: 1rem; }
+      .hourly-grid { display: grid; grid-auto-columns: minmax(9.5rem, 1fr); grid-auto-flow: column; gap: .7rem; overflow-x: auto; padding: 1rem .1rem .5rem; }
+      .hour-card, .day-card { border: 1px solid var(--border); border-radius: .85rem; background: var(--surface); }
+      .hour-card { min-width: 9.5rem; padding: .9rem; }
+      .hour-card time, .hour-card .condition { display: block; color: var(--muted); font-size: .82rem; }
+      .hour-card .temperature { display: block; margin: .45rem 0; font-size: 1.6rem; font-weight: 750; letter-spacing: -.05em; }
+      .hour-card .hour-meta { display: grid; gap: .2rem; color: var(--muted); font-size: .78rem; }
+      .daily-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: .8rem; margin-top: 1rem; }
+      .day-card { padding: 1rem; }
+      .day-card header { align-items: flex-start; }
+      .day-card h3 { margin: 0; }
+      .day-card .day-condition { margin: .3rem 0 0; color: var(--muted); font-size: .82rem; }
+      .day-card .day-temperature { color: var(--accent); font-size: 1.35rem; font-weight: 750; white-space: nowrap; }
+      .day-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; margin: 1rem 0 0; }
+      .day-metrics div { padding: .55rem .65rem; border-radius: .6rem; background: var(--surface-soft); }
+      .day-metrics dt { color: var(--muted); font-size: .7rem; }
+      .day-metrics dd { margin: .15rem 0 0; font-size: .86rem; font-weight: 650; overflow-wrap: anywhere; }
+      table { display: block; width: 100%; overflow-x: auto; border-collapse: collapse; border-spacing: 0; white-space: nowrap; }
+      th, td { border-bottom: 1px solid var(--border); padding: .65rem .75rem; text-align: left; }
+      th { color: var(--muted); background: var(--surface-soft); font-size: .75rem; text-transform: uppercase; letter-spacing: .045em; }
+      td { font-size: .88rem; }
+      tr:last-child td { border-bottom: 0; }
+      .top, .good { color: #167348; font-weight: 700; }
+      .low, .error { color: #b44d32; font-weight: 700; }
+      details.fold > p { max-width: 78ch; }
       form.bar { margin-top: .8rem; }
       td .bar { flex-wrap: nowrap; }
       #providerExplanation { margin-top: 1rem; }
+      @media (prefers-color-scheme: dark) {
+        :root { color: #e4ece6; background: #111a16; --surface: #19231e; --surface-soft: #202c26; --border: #34443a; --muted: #a8b7ad; --accent: #83c6a2; --accent-soft: #233c30; --shadow: 0 8px 28px #0003; }
+        #refresh { color: #10251a; }
+        #refresh:hover { background: #a0d5b7; }
+        .top, .good { color: #8bd3aa; }
+        .low, .error { color: #efa187; }
+      }
+      @media (max-width: 640px) {
+        body { padding: 1.1rem .8rem; }
+        body > section.bar { align-items: stretch; }
+        body > section.bar > label:first-child { width: 100%; }
+        body > section.bar > label:first-child select { width: 100%; margin-top: .3rem; }
+        body > section.bar button { flex: 1 1 auto; }
+        details.fold { padding: 1rem; }
+      }
     </style>
   </head>
   <body>
     <header>
-      <h1>ha_weather &ndash; multi source forecast</h1>
+      <div>
+        <p class="eyebrow">Weather intelligence</p>
+        <h1>ha_weather</h1>
+      </div>
       <nav aria-label="Site navigation"><a href="/static/help.html">Help</a></nav>
     </header>
 
     <section class="bar">
-      <label>Location <select id="location"></select></label>
+      <label>Location<br /><select id="location" aria-label="Location"></select></label>
       <button id="reload">Reload</button>
       <button id="refresh">Refresh forecast</button>
       <button id="verify">Verify with Azure AI Foundry</button>
     </section>
 
     <p id="status" class="muted" role="status"></p>
+    <nav class="dashboard-nav" aria-label="Dashboard sections">
+      <a href="#forecastSection">Forecast</a>
+      <a href="#historySection">History</a>
+      <a href="#gardenSection">Season &amp; garden</a>
+      <a href="#providersSection">Providers</a>
+      <a href="#sourcesSection">Sources</a>
+      <a href="#measurementsSection">Measurements</a>
+      <a href="#settingsSection">Settings</a>
+    </nav>
 
     <details class="fold" id="forecastSection" open>
-      <summary><h2>Forecast</h2></summary>
+      <summary><h2>Forecast overview</h2></summary>
+      <p id="overviewSubtitle" class="muted"></p>
 
       <details class="fold sub" id="next24Section" open>
         <summary><h3>Next 24 hours (updated hourly)</h3></summary>
-        <table>
-          <thead>
-            <tr><th>Time</th><th>Temperature &deg;C</th><th>Precip mm</th><th>Wind</th><th>Condition</th><th>Providers</th></tr>
-          </thead>
-          <tbody id="hourlyForecast"></tbody>
-        </table>
-      </details>
-
-      <details class="fold sub" id="historySection">
-        <summary><h3>History &ndash; last 24 hours</h3></summary>
-        <p class="muted">
-          The first archived hourly consensus prediction of every past hour
-          compared with the measured values (Home Assistant outdoor
-          measurements when configured, otherwise Open-Meteo). Error =
-          predicted &minus; measured.
-        </p>
-        <p id="historySummary"></p>
-        <table>
-          <thead>
-            <tr>
-              <th>Time</th><th>Predicted &deg;C</th><th>Measured &deg;C</th><th>Error K</th>
-              <th>Predicted mm</th><th>Measured mm</th><th>Error mm</th>
-              <th>Predicted condition</th><th>Measured condition</th><th>Lead h</th>
-            </tr>
-          </thead>
-          <tbody id="history"></tbody>
-        </table>
+        <div id="hourlyForecast" class="hourly-grid" aria-label="Hourly forecast"></div>
       </details>
 
       <details class="fold sub" id="next48Section">
@@ -96,17 +159,33 @@
 
       <details class="fold sub" id="daysSection">
         <summary><h3>Next 3&ndash;7 days</h3></summary>
-        <table>
-          <thead>
-            <tr><th>Date</th><th>Min &deg;C</th><th>Max &deg;C</th><th>Precip mm</th><th>Wind</th><th>Condition</th><th>Providers</th><th>ET0 mm</th><th>Water balance mm</th><th>Sunshine h</th><th>Radiation MJ/m&sup2;</th><th>Soil moisture m&sup3;/m&sup3;</th></tr>
-          </thead>
-          <tbody id="forecast"></tbody>
-        </table>
+        <div id="forecast" class="daily-grid" aria-label="Daily forecast"></div>
       </details>
     </details>
 
-    <details class="fold" id="seasonSection">
-      <summary><h2>Seasons</h2></summary>
+    <details class="fold" id="historySection">
+      <summary><h2>History &ndash; last 24 hours</h2></summary>
+      <p class="muted">
+        The first archived hourly consensus prediction of every past hour
+        compared with the measured values (Home Assistant outdoor
+        measurements when configured, otherwise Open-Meteo). Error =
+        predicted &minus; measured.
+      </p>
+      <p id="historySummary"></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th><th>Predicted &deg;C</th><th>Measured &deg;C</th><th>Error K</th>
+            <th>Predicted mm</th><th>Measured mm</th><th>Error mm</th>
+            <th>Predicted condition</th><th>Measured condition</th><th>Lead h</th>
+          </tr>
+        </thead>
+        <tbody id="history"></tbody>
+      </table>
+    </details>
+
+    <details class="fold" id="gardenSection">
+      <summary><h2>Season &amp; garden</h2></summary>
       <p class="muted">Meteorological season and upcoming weather changes.</p>
       <table><tbody id="season"></tbody></table>
     </details>
@@ -310,6 +389,12 @@
 
     <script>
       const $ = (id) => document.getElementById(id);
+      document.querySelectorAll(".dashboard-nav a").forEach((link) => {
+        link.addEventListener("click", () => {
+          const section = $(link.hash.slice(1));
+          if (section instanceof HTMLDetailsElement) section.open = true;
+        });
+      });
       const API_KEY_STORAGE = "ha_weather_api_key";
       const apiKeyInput = $("apiKey");
       apiKeyInput.value = localStorage.getItem(API_KEY_STORAGE) || "";
@@ -499,26 +584,83 @@
         const body = $("forecast");
         body.textContent = "";
         days.slice(2, 7).forEach((day) => {
-          const row = document.createElement("tr");
-          cell(row, day.target_date);
-          cell(row, day.temperature_min);
-          cell(row, day.temperature_max);
-          cell(row, day.precipitation_mm);
-          cell(row, day.wind_speed_max);
-          cell(row, day.condition);
-          cell(row, day.provider_count);
-          cell(row, day.evapotranspiration_mm);
-          cell(row, day.water_balance_mm);
-          cell(row, day.sunshine_hours);
-          cell(row, day.radiation_mj_m2);
-          cell(row, day.soil_moisture);
-          body.appendChild(row);
+          const card = document.createElement("article");
+          card.className = "day-card";
+          const heading = document.createElement("header");
+          const title = document.createElement("div");
+          const date = document.createElement("h3");
+          date.textContent = new Date(`${day.target_date}T12:00:00`).toLocaleDateString(undefined, {
+            weekday: "short", month: "short", day: "numeric",
+          });
+          const condition = document.createElement("p");
+          condition.className = "day-condition";
+          condition.textContent = day.condition || "—";
+          title.append(date, condition);
+          const temperature = document.createElement("span");
+          temperature.className = "day-temperature";
+          temperature.textContent = `${fmt(day.temperature_max) ?? "–"}° / ${fmt(day.temperature_min) ?? "–"}°`;
+          temperature.setAttribute("aria-label", `High ${fmt(day.temperature_max) ?? "unknown"} degrees, low ${fmt(day.temperature_min) ?? "unknown"} degrees`);
+          heading.append(title, temperature);
+
+          const metrics = document.createElement("dl");
+          metrics.className = "day-metrics";
+          [
+            ["Rain", day.precipitation_mm, "mm"],
+            ["Wind", day.wind_speed_max, ""],
+            ["ET₀", day.evapotranspiration_mm, "mm"],
+            ["Water balance", day.water_balance_mm, "mm"],
+            ["Sunshine", day.sunshine_hours, "h"],
+            ["Radiation", day.radiation_mj_m2, "MJ/m²"],
+            ["Soil moisture", day.soil_moisture, "m³/m³"],
+            ["Providers", day.provider_count, ""],
+          ].forEach(([label, value, unit]) => {
+            const metric = document.createElement("div");
+            const term = document.createElement("dt");
+            term.textContent = label;
+            const amount = document.createElement("dd");
+            amount.textContent = value === null || value === undefined ? "–" : `${fmt(value) ?? value}${unit ? ` ${unit}` : ""}`;
+            metric.append(term, amount);
+            metrics.appendChild(metric);
+          });
+          card.append(heading, metrics);
+          body.appendChild(card);
         });
       }
 
       function renderShortForecast(items, targetId) {
         const body = $(targetId);
         body.textContent = "";
+        if (targetId === "hourlyForecast") {
+          items.forEach((item) => {
+            const card = document.createElement("article");
+            card.className = "hour-card";
+            const time = document.createElement("time");
+            time.dateTime = item.target_time;
+            time.textContent = new Date(item.target_time).toLocaleTimeString(undefined, {
+              weekday: "short", hour: "numeric",
+            });
+            const temperature = document.createElement("strong");
+            temperature.className = "temperature";
+            temperature.textContent = `${fmt(item.temperature) ?? "–"}°`;
+            const condition = document.createElement("span");
+            condition.className = "condition";
+            condition.textContent = item.condition || "—";
+            const meta = document.createElement("div");
+            meta.className = "hour-meta";
+            [
+              `Rain ${fmt(item.precipitation_mm) ?? "–"} mm`,
+              `Wind ${fmt(item.wind_speed) ?? "–"}`,
+              `${item.provider_count} provider(s)`,
+            ].forEach((text) => {
+              const line = document.createElement("span");
+              line.textContent = text;
+              meta.appendChild(line);
+            });
+            card.append(time, temperature, condition, meta);
+            body.appendChild(card);
+          });
+          return;
+        }
         items.forEach((item) => {
           const row = document.createElement("tr");
           cell(row, new Date(item.target_time).toLocaleString());
@@ -1201,6 +1343,7 @@
           const forecast = refresh
             ? await api(`/api/forecast/${encodeURIComponent(locationId)}/refresh`, { method: "POST" })
             : await api(`/api/forecast/${encodeURIComponent(locationId)}`);
+          $("overviewSubtitle").textContent = `Forecast for ${locationName(locationId)} · updated ${new Date(forecast.generated_at).toLocaleString()}`;
           renderRanking(locationId, forecast.ranking);
           renderSeason(forecast.season);
           renderForecast(forecast.days);

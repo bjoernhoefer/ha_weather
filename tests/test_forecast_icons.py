@@ -38,6 +38,7 @@ class Element {
   setAttribute(name, value) { this.attributes[name] = value; }
   append(...children) { this.children.push(...children); }
   appendChild(child) { this.append(child); }
+  get firstElementChild() { return this.children[0]; }
   getBoundingClientRect() {
     if (this.tag === "article") measuredCards.push(this);
     return this.tag === "article" ? { left: 500, width: 152 } : { left: 100, width: 600 };
@@ -132,6 +133,16 @@ checkCenter([hourly[1], hourly[2]], 1);
 checkCenter([hourly[0], hourly[1], hourly[3]], -1);
 checkCenter([{...items[0], target_time: "invalid"}], -1);
 checkCenter([], -1);
+grid.clientWidth = 0;
+grid.scrollLeft = 40;
+measuredCards.length = 0;
+renderShortForecast(hourly, "hourlyForecast");
+assert.equal(grid.scrollLeft, 40);
+assert.equal(measuredCards.length, 0);
+grid.clientWidth = 600;
+centerCurrentHour();
+assert.equal(grid.scrollLeft, 216);
+assert.deepEqual(measuredCards, [grid.children[2]]);
 Date.now = () => new Date("2026-10-07T13:00:00Z").getTime();
 checkCenter(hourly, 3);
 Date.now = realNow;

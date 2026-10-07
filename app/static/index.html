@@ -674,6 +674,21 @@
         return svg;
       }
 
+      function centerCurrentHour() {
+        const body = $("hourlyForecast");
+        if (!body.clientWidth) return;
+        const now = Date.now();
+        const current = Array.from(body.children).find((card) => {
+          const start = new Date(card.firstElementChild.dateTime).getTime();
+          return start <= now && now < start + 60 * 60 * 1000;
+        });
+        if (current) {
+          const card = current.getBoundingClientRect();
+          const viewport = body.getBoundingClientRect();
+          body.scrollLeft += card.left - viewport.left + card.width / 2 - body.clientWidth / 2;
+        }
+      }
+
       function renderShortForecast(items, targetId) {
         const body = $(targetId);
         body.textContent = "";
@@ -709,16 +724,7 @@
             card.append(time, temperatureRow, condition, meta);
             body.appendChild(card);
           });
-          const now = Date.now();
-          const currentIndex = items.findIndex((item) => {
-            const start = new Date(item.target_time).getTime();
-            return start <= now && now < start + 60 * 60 * 1000;
-          });
-          if (currentIndex !== -1) {
-            const card = body.children[currentIndex].getBoundingClientRect();
-            const viewport = body.getBoundingClientRect();
-            body.scrollLeft += card.left - viewport.left + card.width / 2 - body.clientWidth / 2;
-          }
+          centerCurrentHour();
           return;
         }
         items.forEach((item) => {
@@ -1370,6 +1376,12 @@
 
       $("historySection").addEventListener("toggle", () => {
         if ($("historySection").open) loadHistory();
+      });
+
+      ["forecastSection", "next24Section"].forEach((id) => {
+        $(id).addEventListener("toggle", () => {
+          if ($(id).open) centerCurrentHour();
+        });
       });
 
       async function locationChanged() {

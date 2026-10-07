@@ -25,16 +25,23 @@ def test_hourly_forecast_icons():
     conditions = sorted(set(WMO_CODES.values()) - {"unknown"})
     javascript = r"""
 const assert = require("node:assert/strict");
+const measuredCards = [];
 class Element {
   constructor(tag) {
     this.tag = tag;
     this.attributes = {};
     this.children = [];
+    this.scrollLeft = 0;
+    this.clientWidth = 600;
     this.classList = { add: (name) => { this.className = name; } };
   }
   setAttribute(name, value) { this.attributes[name] = value; }
   append(...children) { this.children.push(...children); }
   appendChild(child) { this.append(child); }
+  getBoundingClientRect() {
+    if (this.tag === "article") measuredCards.push(this);
+    return this.tag === "article" ? { left: 500, width: 152 } : { left: 100, width: 600 };
+  }
   set textContent(value) { this.text = value; this.children = []; }
   get textContent() { return this.text; }
 }
@@ -102,6 +109,32 @@ assert.equal(bodies.fourHourlyForecast.children[0].children.length, 6);
 assert.equal(bodies.fourHourlyForecast.children[0].children[4].textContent, items[0].condition);
 renderShortForecast([], "hourlyForecast");
 assert.equal(bodies.hourlyForecast.children.length, 0);
+const realNow = Date.now;
+Date.now = () => new Date("2026-10-07T12:37:00Z").getTime();
+const hourly = [
+  "2026-10-06T12:00:00Z",
+  "2026-10-07T11:00:00Z",
+  "2026-10-07T14:00:00+02:00",
+  "2026-10-07T13:00:00Z",
+].map((target_time) => ({...items[0], target_time}));
+const grid = bodies.hourlyForecast;
+const checkCenter = (entries, expectedIndex) => {
+  grid.scrollLeft = 40;
+  measuredCards.length = 0;
+  renderShortForecast(entries, "hourlyForecast");
+  assert.deepEqual(measuredCards, expectedIndex === -1 ? [] : [grid.children[expectedIndex]],
+    "center the current date and hour only");
+  assert.equal(grid.scrollLeft, expectedIndex === -1 ? 40 : 216);
+};
+checkCenter(hourly, 2);
+checkCenter([hourly[2], hourly[3]], 0);
+checkCenter([hourly[1], hourly[2]], 1);
+checkCenter([hourly[0], hourly[1], hourly[3]], -1);
+checkCenter([{...items[0], target_time: "invalid"}], -1);
+checkCenter([], -1);
+Date.now = () => new Date("2026-10-07T13:00:00Z").getTime();
+checkCenter(hourly, 3);
+Date.now = realNow;
 """
     result = subprocess.run(
         [node, "-e", javascript], capture_output=True, text=True, timeout=30

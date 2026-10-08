@@ -402,6 +402,15 @@ Ready to copy `configuration.yaml` snippets (including the
    becomes **Top**, the rest (and everything disabled) becomes **Low**.
 5. The score is also the weight of the provider in the consensus forecast.
 
+## Development workflow
+
+Use GitHub Spec Kit for substantial features that need explicit requirements,
+planning, or cross-surface coordination. Small, low-risk fixes can follow the
+usual inspect-change-test loop without a feature specification. Persona
+reviews are selected by impact and affected area rather than run for every
+change. See the [development workflow in English](docs/development-workflow.en.md)
+or [German](docs/entwicklung.md).
+
 ## Tests
 
 All tests run offline (the HTTP calls are mocked) and are executed by GitHub

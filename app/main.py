@@ -8,12 +8,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from .auth import require_api_key
+from .activity import ActivityEntry, ActivityLevel
 from .config import Settings, get_settings
 from .models import (
     CustomSource,
@@ -129,6 +130,16 @@ def create_app(
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     protected = [Depends(require_api_key)]
+
+    @app.get("/api/logs", response_model=List[ActivityEntry], dependencies=protected)
+    async def logs(
+        response: Response,
+        level: ActivityLevel = ActivityLevel.INFO,
+        limit: int = Query(default=100, ge=1, le=500),
+        service: WeatherService = Depends(get_service),
+    ):
+        response.headers["Cache-Control"] = "no-store"
+        return service.activity.snapshot(level, limit)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict:

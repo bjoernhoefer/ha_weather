@@ -14,6 +14,9 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from .agro import AgroDay, apply_agro, fetch_agro, watering_state
+from .activity import (
+    ActivityEvent, RecentActivity, observation_component, provider_component,
+)
 from .aggregation import aggregate, aggregate_hourly
 from .azure_foundry import AzureFoundryVerifier
 from .clock import now_utc, today_utc
@@ -132,7 +135,9 @@ class WeatherService:
     ) -> None:
         self.settings = settings
         self.storage = storage
+        self.activity = RecentActivity()
         self.verifier = AzureFoundryVerifier(settings)
+        self.verifier.failure_reporter = self._verification_failure
         self.providers: List[WeatherProvider] = []
         self._client_factory = client_factory or self._default_client
         self._cache: Dict[str, LocationForecast] = {}
@@ -394,6 +399,7 @@ class WeatherService:
                 id=instance_id, name=body.name, url=body.url, token=body.token
             )
         )
+        self.activity.record(ActivityEvent.HA_INSTANCE_ADDED)
         return self.observation_sources_status()
 
     def update_ha_instance(
@@ -410,11 +416,13 @@ class WeatherService:
                 token=body.token or stored.token,
             )
         )
+        self.activity.record(ActivityEvent.HA_INSTANCE_UPDATED)
         return self.observation_sources_status()
 
     def delete_ha_instance(self, instance_id: str) -> ObservationSourcesInfo:
         self._stored_instance(instance_id)
         self.storage.delete_ha_instance(instance_id)
+        self.activity.record(ActivityEvent.HA_INSTANCE_DELETED)
         return self.observation_sources_status()
 
     def _check_measurement(
@@ -444,6 +452,7 @@ class WeatherService:
             self.storage.add_measurement(measurement)
         except sqlite3.IntegrityError as exc:
             raise ConflictError("this measurement already exists") from exc
+        self.activity.record(ActivityEvent.HA_MEASUREMENT_ADDED)
         return self.observation_sources_status()
 
     def update_measurement(
@@ -456,11 +465,13 @@ class WeatherService:
             self.storage.update_measurement(measurement_id, measurement)
         except sqlite3.IntegrityError as exc:
             raise ConflictError("this measurement already exists") from exc
+        self.activity.record(ActivityEvent.HA_MEASUREMENT_UPDATED)
         return self.observation_sources_status()
 
     def delete_measurement(self, measurement_id: int) -> ObservationSourcesInfo:
         if not self.storage.delete_measurement(measurement_id):
             raise UnknownMeasurementError(str(measurement_id))
+        self.activity.record(ActivityEvent.HA_MEASUREMENT_DELETED)
         return self.observation_sources_status()
 
     def elasticsearch_status(self) -> ElasticsearchSettingsInfo:
@@ -542,6 +553,7 @@ class WeatherService:
                 location_field=body.location_field or DEFAULT_ELASTICSEARCH_LOCATION_FIELD,
             )
         )
+        self.activity.record(ActivityEvent.ES_INSTANCE_ADDED)
         return self.observation_sources_status()
 
     def update_es_instance(
@@ -560,11 +572,13 @@ class WeatherService:
                 location_field=body.location_field or DEFAULT_ELASTICSEARCH_LOCATION_FIELD,
             )
         )
+        self.activity.record(ActivityEvent.ES_INSTANCE_UPDATED)
         return self.observation_sources_status()
 
     def delete_es_instance(self, instance_id: str) -> ObservationSourcesInfo:
         self._stored_es_instance(instance_id)
         self.storage.delete_es_instance(instance_id)
+        self.activity.record(ActivityEvent.ES_INSTANCE_DELETED)
         return self.observation_sources_status()
 
     def _check_es_measurement(
@@ -593,6 +607,7 @@ class WeatherService:
             self.storage.add_es_measurement(measurement)
         except sqlite3.IntegrityError as exc:
             raise ConflictError("this Elasticsearch field mapping already exists") from exc
+        self.activity.record(ActivityEvent.ES_MEASUREMENT_ADDED)
         return self.observation_sources_status()
 
     def update_es_measurement(
@@ -605,11 +620,13 @@ class WeatherService:
             self.storage.update_es_measurement(measurement_id, measurement)
         except sqlite3.IntegrityError as exc:
             raise ConflictError("this Elasticsearch field mapping already exists") from exc
+        self.activity.record(ActivityEvent.ES_MEASUREMENT_UPDATED)
         return self.observation_sources_status()
 
     def delete_es_measurement(self, measurement_id: int) -> ObservationSourcesInfo:
         if not self.storage.delete_es_measurement(measurement_id):
             raise UnknownMeasurementError(str(measurement_id))
+        self.activity.record(ActivityEvent.ES_MEASUREMENT_DELETED)
         return self.observation_sources_status()
 
     def reload_providers(self) -> None:
@@ -619,7 +636,22 @@ class WeatherService:
             build_providers(self.provider_settings()) + self._custom_providers()
         )
         self.providers = [p for p in candidates if p.name not in disabled]
+        for provider in self.providers:
+            provider.failure_reporter = self._provider_failure
         self._cache.clear()
+
+    def _provider_failure(self, name: str, exception: Exception) -> None:
+        self.activity.record(
+            ActivityEvent.PROVIDER_FAILED, provider_component(name), exception
+        )
+
+    def _observation_failure(self, name: str, exception: Exception) -> None:
+        self.activity.record(
+            ActivityEvent.OBSERVATION_FAILED, observation_component(name), exception
+        )
+
+    def _verification_failure(self, _name: str, exception: Exception) -> None:
+        self.activity.record(ActivityEvent.VERIFICATION_FAILED, "azure_foundry", exception)
 
     def is_known_source(self, name: str) -> bool:
         return name in registered_providers() or any(
@@ -674,6 +706,9 @@ class WeatherService:
             raise UnknownSourceError(name)
         self.storage.set_source_enabled(name, enabled)
         self.reload_providers()
+        self.activity.record(
+            ActivityEvent.PROVIDER_ENABLED if enabled else ActivityEvent.PROVIDER_DISABLED
+        )
         return self.sources()
 
     def _key_provider(self, name: str):
@@ -690,13 +725,17 @@ class WeatherService:
         self._key_provider(name)
         self.storage.set_api_key(name, api_key)
         self.reload_providers()
+        self.activity.record(ActivityEvent.API_KEY_UPDATED)
         return self.sources()
 
     def delete_api_key(self, name: str) -> List[SourceInfo]:
         """Remove the UI key; an environment key (if any) applies again."""
         self._key_provider(name)
+        existed = name in self.storage.api_keys()
         self.storage.delete_api_key(name)
         self.reload_providers()
+        if existed:
+            self.activity.record(ActivityEvent.API_KEY_DELETED)
         return self.sources()
 
     def add_custom_source(self, source: CustomSource) -> List[SourceInfo]:
@@ -708,6 +747,7 @@ class WeatherService:
             raise SourceConflictError(f"custom source '{source.name}' already exists")
         self.storage.save_custom_source(source)
         self.reload_providers()
+        self.activity.record(ActivityEvent.CUSTOM_SOURCE_ADDED)
         return self.sources()
 
     def delete_custom_source(self, name: str) -> List[SourceInfo]:
@@ -718,6 +758,7 @@ class WeatherService:
         if not self.storage.delete_custom_source(name):
             raise UnknownSourceError(name)
         self.reload_providers()
+        self.activity.record(ActivityEvent.CUSTOM_SOURCE_DELETED)
         return self.sources()
 
     # ------------------------------------------------------------------
@@ -777,6 +818,7 @@ class WeatherService:
             aemet_municipality=body.aemet_municipality,
         )
         self.storage.save_location(location)
+        self.activity.record(ActivityEvent.LOCATION_ADDED)
         return self.locations()
 
     def delete_location(self, location_id: str) -> List[LocationInfo]:
@@ -787,6 +829,7 @@ class WeatherService:
         if not self.storage.delete_location(location_id):
             raise UnknownLocationError(location_id)
         self._cache.pop(location_id, None)
+        self.activity.record(ActivityEvent.LOCATION_DELETED)
         return self.locations()
 
     def providers_for(self, location: Location) -> List[WeatherProvider]:
@@ -831,21 +874,54 @@ class WeatherService:
     # ------------------------------------------------------------------
     async def refresh(self, location_id: str) -> LocationForecast:
         """Query every provider, archive the results and rebuild the forecast."""
+        try:
+            return await self._refresh(location_id)
+        except Exception as exc:
+            self.activity.record(ActivityEvent.REFRESH_FAILED, "service", exc)
+            raise
+
+    async def _fetch_provider(
+        self, provider: WeatherProvider, client: httpx.AsyncClient, location: Location
+    ) -> ProviderForecast:
+        # Base providers report caught failures themselves; overrides may raise.
+        provider.failure_reporter = self._provider_failure
+        try:
+            return await provider.fetch(client, location)
+        except Exception as exc:
+            self._provider_failure(provider.name, exc)
+            raise
+
+    async def _refresh(self, location_id: str) -> LocationForecast:
         location = self.location(location_id)
+        observation_failed = False
+        agro_failed = False
+
+        def report_observation(name: str, exception: Exception) -> None:
+            nonlocal observation_failed
+            observation_failed = True
+            self._observation_failure(name, exception)
+
+        def report_agro(name: str, exception: Exception) -> None:
+            nonlocal agro_failed
+            agro_failed = True
+            event = ActivityEvent.SOIL_FAILED if name == "soil_moisture" else ActivityEvent.AGRO_FAILED
+            self.activity.record(event, "agro.open_meteo", exception)
 
         async with self._client_factory() as client:
             agro, *results = await asyncio.gather(
-                fetch_agro(client, self.settings, location),
+                fetch_agro(client, self.settings, location, failure_reporter=report_agro),
                 *(
-                    provider.fetch(client, location)
+                    self._fetch_provider(provider, client, location)
                     for provider in self.providers_for(location)
                 ),
             )
             try:
                 observations = await fetch_observations(
-                    client, self.observation_settings(), location
+                    client, self.observation_settings(), location,
+                    failure_reporter=report_observation,
                 )
             except Exception as exc:  # noqa: BLE001 - scoring may lag behind
+                report_observation("custom", exc)
                 LOGGER.warning("observation update failed for %s: %s", location_id, exc)
                 observations = []
 
@@ -859,6 +935,15 @@ class WeatherService:
             location_id, forecast.generated_at, forecast.hourly
         )
         self._cache[location_id] = forecast
+        if not forecast.days and not forecast.hourly:
+            event = ActivityEvent.REFRESH_EMPTY
+        elif observation_failed or agro_failed or any(
+            item.error or not (item.days or item.hours) for item in forecasts
+        ):
+            event = ActivityEvent.REFRESH_PARTIAL
+        else:
+            event = ActivityEvent.REFRESH_COMPLETED
+        self.activity.record(event, "service")
         return forecast
 
     def _build(
@@ -919,15 +1004,24 @@ class WeatherService:
         if "home_assistant" not in settings.observation_sources:
             return {}
         source = HomeAssistantObservationSource(settings)
+        source.failure_reporter = self._observation_failure
         if not (source.is_available() and source.supports(location)):
             return {}
         try:
             return await source.fetch_hourly(client, location, start, end)
         except Exception as exc:  # noqa: BLE001 - Open-Meteo is the fallback
+            self._observation_failure("home_assistant", exc)
             LOGGER.warning("Home Assistant history failed for %s: %s", location.id, exc)
             return {}
 
     async def history(self, location_id: str) -> ForecastHistory:
+        try:
+            return await self._history(location_id)
+        except Exception as exc:
+            self.activity.record(ActivityEvent.HISTORY_FAILED, "service", exc)
+            raise
+
+    async def _history(self, location_id: str) -> ForecastHistory:
         """The last 24 hours: archived hourly consensus vs. measured values.
 
         Temperatures measured by Home Assistant outdoor sensors win over the
@@ -942,6 +1036,7 @@ class WeatherService:
             try:
                 return await fetch_hourly_observations(client, location, start, end)
             except Exception as exc:  # noqa: BLE001 - show the predictions anyway
+                self._observation_failure("open_meteo", exc)
                 LOGGER.warning("hourly observations failed for %s: %s", location_id, exc)
                 return {}
 
@@ -1022,12 +1117,15 @@ class WeatherService:
         self.location(override.location_id)
         self.storage.save_override(override)
         self._cache.pop(override.location_id, None)
+        self.activity.record(ActivityEvent.OVERRIDE_UPDATED)
         return self.ranking(override.location_id)
 
     def delete_override(self, location_id: str, provider: str) -> bool:
         self.location(location_id)
         removed = self.storage.delete_override(location_id, provider)
         self._cache.pop(location_id, None)
+        if removed:
+            self.activity.record(ActivityEvent.OVERRIDE_DELETED)
         return removed
 
     def season(self, location_id: str) -> SeasonInfo:

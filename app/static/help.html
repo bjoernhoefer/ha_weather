@@ -33,9 +33,18 @@
           <li><strong>Seasons and garden indicators:</strong> view seasonal and upcoming weather changes alongside evapotranspiration, water balance, sunshine, radiation and soil moisture.</li>
           <li><strong>Real world measurements:</strong> add any number of Home Assistant instances (URL + long-lived token), then add measurements that couple a sensor entity of an instance with a location and indoor/outdoor scope. Edit or delete them in the list. Elasticsearch works the same way: add any number of instances (URL, API key, index, location field), then add fields that couple a temperature field of an instance with a location and scope. Deleting an instance also deletes its measurements or fields.</li>
           <li><strong>General settings:</strong> add a location by name (optionally with latitude/longitude for better accuracy) or delete locations added here, and enter the API key.</li>
+          <li><strong>Logging:</strong> below General settings, open the panel to inspect recent updates, configuration changes and safe failure summaries. Refresh logs or change the minimum severity to fetch the latest entries.</li>
           <li><strong>Verify with Azure AI Foundry:</strong> request an additional assessment when an Azure AI Foundry deployment is configured.</li>
           <li><strong>Public mode:</strong> enter your API key under <em>General settings</em>; it opens automatically when the key is missing or wrong. The key is stored in this browser.</li>
         </ul>
+      </section>
+
+      <section aria-labelledby="logging-heading">
+        <h2 id="logging-heading">Logging / Protokoll</h2>
+        <p lang="en">The Logging panel loads on opening, on severity changes and with Refresh logs; it does not poll in the background. It also reports failed optional garden/soil updates and Azure verification. INFO shows all entries, WARNING includes warnings and errors, and ERROR shows only errors. Timestamps are UTC. Up to 100 matching entries appear newest first.</p>
+        <p lang="en">The service keeps its latest 500 entries in memory per process. Restart clears the history; workers have separate logs. This is not a durable audit trail. Log reads and cached forecast reads do not create updates. Access is anonymous in local mode and uses your API key in public mode. Messages show safe summaries and recognized error categories, not credentials, entered settings or raw exception details; use server/container logs for further investigation.</p>
+        <p lang="de">Der Abschnitt Logging unter General settings lädt beim Öffnen, beim Wechsel der Mindeststufe und mit Refresh logs; es gibt keine automatische Abfrage im Hintergrund. Er zeigt auch fehlgeschlagene optionale Garten-/Bodenaktualisierungen und Azure-Prüfungen. INFO zeigt alle Einträge, WARNING Warnungen und Fehler, ERROR nur Fehler. Zeitangaben sind UTC. Höchstens 100 passende Einträge werden angezeigt, die neuesten zuerst.</p>
+        <p lang="de">Die letzten 500 Einträge bleiben je Dienstprozess im Arbeitsspeicher. Ein Neustart löscht sie; Worker haben getrennte Protokolle. Dies ist kein dauerhaftes Auditprotokoll. Protokollabfragen und Wetterabfragen aus dem Cache erzeugen keine Aktualisierungseinträge. Lokal ist der Zugriff anonym, im öffentlichen Modus wird der vorhandene API-Schlüssel benötigt. Meldungen enthalten sichere Zusammenfassungen und bekannte Fehlerkategorien, keine Zugangsdaten, eingegebenen Einstellungen oder vollständigen Ausnahmen; Details stehen in den Server-/Containerlogs.</p>
       </section>
 
       <section aria-labelledby="history-heading">

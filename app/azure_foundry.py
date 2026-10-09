@@ -18,6 +18,7 @@ from typing import Dict, List, Optional
 import httpx
 
 from .clock import now_utc
+from .activity import FailureReporter, notify_failure
 from .config import Settings
 from .models import ProviderScore, VerificationResult
 
@@ -82,6 +83,7 @@ class AzureFoundryVerifier:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.failure_reporter: FailureReporter | None = None
 
     @property
     def configured(self) -> bool:
@@ -135,6 +137,7 @@ class AzureFoundryVerifier:
                 )
             )
         except Exception as exc:  # noqa: BLE001 - verification is best effort
+            notify_failure(self.failure_reporter, "azure_foundry", exc)
             LOGGER.warning("Azure AI Foundry verification failed: %s", exc)
             return VerificationResult(
                 location_id=location_id,

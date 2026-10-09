@@ -228,6 +228,7 @@ class ElasticsearchObservationSource(ObservationSource):
                     client, instances[item.instance_id], location, item.field, past_days
                 )
             except Exception as exc:  # noqa: BLE001 - one instance must not break all
+                self.report_failure(exc)
                 LOGGER.warning(
                     "Elasticsearch instance %s failed for %s: %s",
                     item.instance_id,

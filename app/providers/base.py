@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Type
 import httpx
 
 from ..clock import now_utc
+from ..activity import FailureReporter, notify_failure
 from ..config import Location, Settings
 from ..models import DailyForecast, HourlyForecast, ProviderForecast
 
@@ -30,6 +31,7 @@ class WeatherProvider(abc.ABC):
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.failure_reporter: Optional[FailureReporter] = None
 
     def is_available(self) -> bool:
         """Providers without their (optional) credentials are skipped."""
@@ -62,6 +64,7 @@ class WeatherProvider(abc.ABC):
                 self._fetch_hourly(client, location),
             )
         except Exception as exc:  # noqa: BLE001 - one bad source must not break all
+            notify_failure(self.failure_reporter, self.name, exc)
             LOGGER.warning("provider %s failed for %s: %s", self.name, location.id, exc)
             return ProviderForecast(
                 provider=self.name,

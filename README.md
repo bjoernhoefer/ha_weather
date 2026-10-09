@@ -50,7 +50,8 @@ verifies how accurate every source actually was and exposes a
   foldable sections: *Forecast* (next 24 hours open; history of the last 24
   hours with prediction accuracy, next 48 hours and days 3–7 folded),
   *Seasons*, *Providers*, *Source control*, *Real world measurements* and
-  *General settings* (add/remove locations, API key).
+  *General settings* (add/remove locations, API key), followed by *Logging*
+  (recent updates and safe failure summaries).
 * **Meteorological point of view** – season change detection
   (`weather_season`, `weather_season_from`, `weather_season_to`,
   `weather_seasonal_change`) plus regime changes such as a pronounced cool down
@@ -240,6 +241,7 @@ others or the forecast refresh.
 | --- | --- |
 | `GET /health` | liveness probe, never authenticated |
 | `GET /api/locations` | configured locations (environment + added in the UI, `custom: true`) |
+| `GET /api/logs?level=INFO&limit=100` | recent activity, newest first; minimum severity `INFO`, `WARNING` or `ERROR`, limit 1–500 |
 | `POST /api/locations` | add a location `{"name": "Graz", "latitude": 47.07, "longitude": 15.44}` – without coordinates the name is geocoded via Open-Meteo |
 | `DELETE /api/locations/{location}` | remove a location added in the UI (environment locations are read-only) |
 | `GET /api/observation-sources` | real world measurement sources, Home Assistant instances and measurements |
@@ -279,6 +281,54 @@ In `public` mode send the key as `X-API-Key: <key>` or
 In the web UI enter the key under **General settings → API key**; it is
 stored in the browser and the section opens automatically when a request is
 rejected with 401.
+
+## Recent activity / Letzte Aktivitäten
+
+**English:** Open **Logging** below **General settings** to see recent forecast
+updates, configuration changes and provider/measurement failures, including
+failed optional garden/soil updates and Azure verification. Opening the
+panel, changing the minimum severity or clicking **Refresh logs** fetches the
+latest entries; there is no background polling. `INFO` includes all entries,
+`WARNING` includes warnings and errors, and `ERROR` includes only errors.
+Timestamps are UTC. The UI shows up to 100 matching entries, newest first.
+
+`GET /api/logs` returns a JSON array of `timestamp`, `level`, `component` and
+`message`; `level=INFO` and `limit=100` are the defaults. The API accepts limits
+from 1 to 500 and applies filtering before limiting. Severity names are
+case-sensitive; invalid levels or noninteger/out-of-range limits return HTTP 422.
+Access follows the existing
+deployment policy: anonymous in local mode, API key required in public mode.
+Only safe event summaries and recognized error categories are exposed—not keys,
+tokens, submitted settings, raw exception details or third-party log output.
+Existing server/container logs remain the place for detailed troubleshooting.
+
+The last 500 entries are held in memory per service process, disappear on restart
+and are not shared between workers. This is a diagnostic view, not a persistent
+audit trail; cached forecast reads and log reads do not create update entries.
+
+**Deutsch:** Unter **General settings** befindet sich der aufklappbare Abschnitt
+**Logging** mit aktuellen Wetteraktualisierungen, Konfigurationsänderungen und
+Fehlern von Wetter- oder Messquellen sowie fehlgeschlagenen optionalen Garten-/
+Bodenaktualisierungen und Azure-Prüfungen. Beim Öffnen, beim Wechsel der Mindeststufe
+oder mit **Refresh logs** werden die Einträge geladen; es gibt keine automatische
+Abfrage im Hintergrund. `INFO` zeigt alle Einträge, `WARNING` Warnungen und Fehler,
+`ERROR` nur Fehler. Die Zeitangaben sind UTC; die Oberfläche zeigt höchstens
+100 passende Einträge, die neuesten zuerst.
+
+`GET /api/logs` liefert ein JSON-Array mit `timestamp`, `level`, `component` und
+`message`. Standardwerte sind `level=INFO` und `limit=100`; erlaubt sind 1 bis
+500 Einträge, die nach der Stufenfilterung begrenzt werden. Stufennamen beachten
+Groß-/Kleinschreibung; ungültige Stufen sowie nicht ganzzahlige oder außerhalb
+des Bereichs liegende Grenzen führen zu HTTP 422. Lokal ist der Zugriff
+anonym, im öffentlichen Modus wird der vorhandene API-Schlüssel benötigt.
+Angezeigt werden nur sichere Zusammenfassungen und bekannte Fehlerkategorien,
+keine Schlüssel, Tokens, eingegebenen Einstellungen, vollständigen Ausnahmen
+oder unverarbeiteten Fremdprotokolle. Details bleiben in den Server-/Containerlogs.
+
+Die letzten 500 Einträge liegen je Dienstprozess im Arbeitsspeicher, gehen beim
+Neustart verloren und werden nicht zwischen Workern geteilt. Die Ansicht ist
+kein dauerhaftes Auditprotokoll; Cache- und Protokollabfragen erzeugen keine
+Aktualisierungseinträge.
 
 ## Source control
 

@@ -96,6 +96,17 @@
       form.bar { margin-top: .8rem; }
       td .bar { flex-wrap: nowrap; }
       #providerExplanation { margin-top: 1rem; }
+      #loggingSection > summary:focus-visible { outline: 3px solid #78b99a88; outline-offset: 4px; }
+      .log-controls { margin-top: 1rem; }
+      .log-controls label { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; min-width: 0; max-width: 100%; }
+      .log-controls select { max-width: 100%; }
+      .log-list { list-style: none; padding: 0; margin: 0; }
+      .log-entry { padding: .75rem 0; border-top: 1px solid var(--border); }
+      .log-meta { display: flex; flex-wrap: wrap; gap: .3rem .75rem; align-items: baseline; font-size: .8rem; }
+      .log-meta time { color: var(--muted); }
+      .log-level { font-weight: 750; }
+      .log-component, .log-message { overflow-wrap: anywhere; min-width: 0; }
+      .log-message { margin: .3rem 0 0; font-size: .88rem; line-height: 1.55; white-space: pre-wrap; }
       @media (prefers-color-scheme: dark) {
         :root { color: #e4ece6; background: #111a16; --surface: #19231e; --surface-soft: #202c26; --border: #34443a; --muted: #a8b7ad; --accent: #83c6a2; --accent-soft: #233c30; --shadow: 0 8px 28px #0003; }
         #refresh { color: #10251a; }
@@ -138,6 +149,7 @@
       <a href="#sourcesSection">Sources</a>
       <a href="#measurementsSection">Measurements</a>
       <a href="#settingsSection">Settings</a>
+      <a href="#loggingSection">Logging</a>
     </nav>
 
     <details class="fold" id="forecastSection" open>
@@ -389,6 +401,23 @@
       </form>
     </details>
 
+    <details class="fold" id="loggingSection">
+      <summary><h2>Logging</h2></summary>
+      <p class="muted" id="logsHelp">Latest 100 matching entries, newest first. Times are UTC. Recent activity is temporary and cleared on restart; reopen or refresh manually for updates.</p>
+      <div class="bar log-controls">
+        <label for="logsLevel">Minimum severity
+          <select id="logsLevel" aria-describedby="logsHelp">
+            <option value="INFO">INFO — all activity</option>
+            <option value="WARNING">WARNING — warnings and errors</option>
+            <option value="ERROR">ERROR — errors only</option>
+          </select>
+        </label>
+        <button type="button" id="refreshLogs">Refresh logs</button>
+      </div>
+      <p id="logsStatus" class="muted" role="status" aria-live="polite">Open Logging to load recent activity.</p>
+      <ol id="logsList" class="log-list" aria-label="Recent activity" aria-busy="false"></ol>
+    </details>
+
     <script>
       const $ = (id) => document.getElementById(id);
       document.querySelectorAll(".dashboard-nav a").forEach((link) => {
@@ -430,6 +459,67 @@
         }
         return response.json();
       }
+
+      let logsRequest = 0;
+
+      async function loadLogs() {
+        const request = ++logsRequest;
+        const level = $("logsLevel").value;
+        const list = $("logsList");
+        list.textContent = "";
+        list.setAttribute("aria-busy", "true");
+        $("refreshLogs").disabled = true;
+        $("logsStatus").textContent = "Loading recent activity…";
+        try {
+          const entries = await api(`/api/logs?level=${encodeURIComponent(level)}&limit=100`, { cache: "no-store" });
+          if (request !== logsRequest) return;
+          if (!Array.isArray(entries)) throw new Error("Invalid log response");
+          entries.slice(0, 100).forEach((entry) => {
+            const row = document.createElement("li");
+            row.className = "log-entry";
+            const meta = document.createElement("div");
+            meta.className = "log-meta";
+            const time = document.createElement("time");
+            const date = entry?.timestamp ? new Date(entry.timestamp) : null;
+            if (date && !Number.isNaN(date.getTime())) {
+              time.dateTime = date.toISOString();
+              time.textContent = date.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, " UTC");
+            } else {
+              time.textContent = "Time unavailable (UTC)";
+            }
+            const severity = document.createElement("span");
+            severity.className = "log-level";
+            severity.textContent = entry?.level ?? "Unknown severity";
+            const component = document.createElement("span");
+            component.className = "log-component";
+            component.textContent = entry?.component ?? "Unknown component";
+            const message = document.createElement("p");
+            message.className = "log-message";
+            message.textContent = entry?.message ?? "No summary available.";
+            meta.append(time, severity, component);
+            row.append(meta, message);
+            list.appendChild(row);
+          });
+          $("logsStatus").textContent = entries.length
+            ? `Showing ${Math.min(entries.length, 100)} latest matching entries · UTC.`
+            : level === "INFO" ? "No recent activity yet." : "No recent activity matches this severity.";
+        } catch (error) {
+          if (request !== logsRequest) return;
+          list.textContent = "";
+          $("logsStatus").textContent = "Unable to load recent activity. Check your connection or API key in General settings, then refresh logs.";
+        } finally {
+          if (request === logsRequest) {
+            list.setAttribute("aria-busy", "false");
+            $("refreshLogs").disabled = false;
+          }
+        }
+      }
+
+      $("loggingSection").addEventListener("toggle", () => {
+        if ($("loggingSection").open) loadLogs();
+      });
+      $("refreshLogs").addEventListener("click", loadLogs);
+      $("logsLevel").addEventListener("change", loadLogs);
 
       function button(text, onClick) {
         const element = document.createElement("button");

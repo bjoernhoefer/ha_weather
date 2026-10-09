@@ -101,3 +101,34 @@ async def test_fetch_agro_never_raises(today):
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         assert await fetch_agro(client, Settings(), VIENNA) == {}
+
+
+@pytest.mark.parametrize("failed_variable", ["daily", "hourly"])
+async def test_failure_reporting_preserves_independent_agro_results(today, failed_variable):
+    def handler(request):
+        if failed_variable in request.url.params:
+            raise httpx.ReadTimeout("sentinel secret URL")
+        return httpx.Response(200, json=(
+            agro_payload(today) if "daily" in request.url.params else soil_payload(today)
+        ))
+
+    failures = []
+
+    def report(component, exception):
+        failures.append((component, type(exception)))
+
+    def broken_reporter(*args):
+        raise RuntimeError("sentinel callback")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        before = await fetch_agro(client, Settings(), VIENNA)
+        reported = await fetch_agro(client, Settings(), VIENNA, failure_reporter=report)
+        broken = await fetch_agro(client, Settings(), VIENNA, failure_reporter=broken_reporter)
+    assert before and before == reported == broken
+    assert failures == [("agro" if failed_variable == "daily" else "soil_moisture", httpx.ReadTimeout)]
+    if failed_variable == "daily":
+        assert before[today].soil_moisture is not None
+        assert before[today].evapotranspiration_mm is None
+    else:
+        assert before[today].evapotranspiration_mm is not None
+        assert before[today].soil_moisture is None

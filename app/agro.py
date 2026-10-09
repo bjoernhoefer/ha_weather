@@ -24,6 +24,7 @@ import httpx
 from pydantic import BaseModel
 
 from .config import Location, Settings
+from .activity import FailureReporter, notify_failure
 from .models import AggregatedDay
 
 LOGGER = logging.getLogger(__name__)
@@ -86,7 +87,8 @@ def parse_soil_moisture(payload: dict) -> Dict[date, float]:
 
 
 async def fetch_agro(
-    client: httpx.AsyncClient, settings: Settings, location: Location
+    client: httpx.AsyncClient, settings: Settings, location: Location,
+    failure_reporter: FailureReporter | None = None,
 ) -> Dict[date, AgroDay]:
     """Fetch the indicators; errors are logged and yield missing values."""
     base = {
@@ -101,6 +103,7 @@ async def fetch_agro(
         response.raise_for_status()
         days = parse_agro_daily(response.json())
     except Exception as exc:  # noqa: BLE001 - indicators are optional
+        notify_failure(failure_reporter, "agro", exc)
         LOGGER.warning("agro indicators failed for %s: %s", location.id, exc)
 
     try:
@@ -109,6 +112,7 @@ async def fetch_agro(
         for day, value in parse_soil_moisture(response.json()).items():
             days.setdefault(day, AgroDay(target_date=day)).soil_moisture = value
     except Exception as exc:  # noqa: BLE001 - indicators are optional
+        notify_failure(failure_reporter, "soil_moisture", exc)
         LOGGER.warning("soil moisture failed for %s: %s", location.id, exc)
     return days
 

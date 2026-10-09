@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Type
 import httpx
 
 from ..config import Location, Settings
+from ..activity import FailureReporter, notify_failure
 from ..models import Observation
 
 LOGGER = logging.getLogger(__name__)
@@ -34,6 +35,10 @@ class ObservationSource(abc.ABC):
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.failure_reporter: Optional[FailureReporter] = None
+
+    def report_failure(self, exception: Exception) -> None:
+        notify_failure(self.failure_reporter, self.name, exception)
 
     def is_available(self) -> bool:
         """Sources without their (required) credentials are skipped."""

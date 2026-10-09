@@ -90,3 +90,37 @@ async def test_verifier_survives_an_api_error(settings):
         result = await verifier.verify(client, "vienna", "Vienna", SCORES)
     assert result.available is False
     assert "failed" in result.summary
+
+
+async def test_failure_reporter_does_not_change_verification_fallback(settings, monkeypatch):
+    from app.clock import now_utc
+
+    instant = now_utc()
+    monkeypatch.setattr("app.azure_foundry.now_utc", lambda: instant)
+    configured = settings.model_copy(update={
+        "azure_foundry_endpoint": "https://sentinel.invalid",
+        "azure_foundry_api_key": "sentinel-key",
+    })
+    failure = httpx.ReadTimeout("sentinel secret")
+
+    def handler(request):
+        raise failure
+
+    verifier = AzureFoundryVerifier(configured)
+    failures = []
+
+    def report(component, exception):
+        failures.append((component, exception))
+
+    def broken_reporter(*args):
+        raise RuntimeError("sentinel callback")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        before = await verifier.verify(client, "vienna", "Vienna", SCORES)
+        verifier.failure_reporter = report
+        reported = await verifier.verify(client, "vienna", "Vienna", SCORES)
+        verifier.failure_reporter = broken_reporter
+        broken = await verifier.verify(client, "vienna", "Vienna", SCORES)
+    assert not before.available
+    assert before == reported == broken
+    assert failures == [("azure_foundry", failure)]

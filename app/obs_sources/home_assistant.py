@@ -323,6 +323,7 @@ class HomeAssistantObservationSource(ObservationSource):
                     )
                 )
             except Exception as exc:  # noqa: BLE001 - one instance must not break all
+                self.report_failure(exc)
                 LOGGER.warning(
                     "Home Assistant instance %s failed for %s: %s",
                     instance_id,
@@ -363,6 +364,7 @@ class HomeAssistantObservationSource(ObservationSource):
                     )
                 )
             except Exception as exc:  # noqa: BLE001 - one instance must not break all
+                self.report_failure(exc)
                 LOGGER.warning(
                     "Home Assistant instance %s failed for %s: %s",
                     instance_id,

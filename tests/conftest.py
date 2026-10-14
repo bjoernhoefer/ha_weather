@@ -235,6 +235,81 @@ def mock_transport(today: date) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         host = request.url.host
+        if host == "external.invalid":
+            return httpx.Response(200, json=[])
+        if host and host.startswith("homeassistant."):
+            if request.url.path == "/api/states":
+                if not request.headers.get("Authorization", "").startswith("Bearer "):
+                    return httpx.Response(401, json={"message": "unauthorized"})
+                if host == "homeassistant.timeout.local":
+                    raise httpx.ReadTimeout("mock timeout", request=request)
+                if host == "homeassistant.redirect.local":
+                    return httpx.Response(
+                        302, headers={"Location": "http://external.invalid/api/states"}
+                    )
+                if host == "homeassistant.error.local":
+                    return httpx.Response(401, json={"message": "unauthorized"})
+                return httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "entity_id": "sensor.garden_temperature",
+                            "state": "18.5",
+                            "attributes": {
+                                "friendly_name": "Garten temperature",
+                                "unit_of_measurement": "°C",
+                                "device_class": "temperature",
+                            },
+                        },
+                        {
+                            "entity_id": "sensor.garten_humidity",
+                            "state": "55",
+                            "attributes": {
+                                "friendly_name": "Garten humidity",
+                                "unit_of_measurement": "%",
+                            },
+                        },
+                        {
+                            "entity_id": "sensor.other_garden",
+                            "state": "17",
+                            "attributes": {
+                                "friendly_name": "Other outdoor temperature",
+                                "unit_of_measurement": "°C",
+                                "device_class": "temperature",
+                            },
+                        },
+                        {
+                            "entity_id": "switch.garten_light",
+                            "state": "on",
+                            "attributes": {"friendly_name": "Garten light"},
+                        },
+                        {
+                            "entity_id": "sensor.garten_unknown",
+                            "state": "unknown",
+                            "attributes": {
+                                "friendly_name": "Garten unknown",
+                                "unit_of_measurement": "°C",
+                            },
+                        },
+                        {
+                            "entity_id": "sensor.garten_fahrenheit",
+                            "state": "65",
+                            "attributes": {
+                                "friendly_name": "Garten Fahrenheit",
+                                "unit_of_measurement": "°F",
+                            },
+                        },
+                        {
+                            "entity_id": "sensor.garten_nan",
+                            "state": "NaN",
+                            "attributes": {
+                                "friendly_name": "Garten invalid value",
+                                "unit_of_measurement": "°C",
+                                "device_class": "temperature",
+                            },
+                        },
+                    ],
+                )
         if host == "api.met.no":
             return httpx.Response(200, json=met_no_payload(today))
         if host == "api.openweathermap.org":

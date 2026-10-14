@@ -441,6 +441,10 @@ Ready to copy `configuration.yaml` snippets (including the
 `upcoming_weather_change` / `weather_seasonal_change` binary sensors) are in
 [docs/home-assistant.md](docs/home-assistant.md).
 
+To select Home Assistant outdoor sensors as real-world measurement sources,
+see the [English guide](docs/home-assistant-measurements.en.md) or
+[German guide](docs/home-assistant-measurements.de.md).
+
 ## How the Top/Low list is built
 
 1. Every provider forecast is archived with its issue date.

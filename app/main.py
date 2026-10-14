@@ -21,6 +21,7 @@ from .models import (
     ElasticsearchInstanceIn,
     ElasticsearchMeasurementIn,
     ForecastHistory,
+    HomeAssistantEntityInfo,
     HomeAssistantInstanceIn,
     LocationForecast,
     LocationIn,
@@ -38,6 +39,8 @@ from .providers.open_meteo import OPEN_METEO_MODEL_CATALOG
 from .service import (
     ApiKeyNotSupportedError,
     ConflictError,
+    HomeAssistantDiscoveryError,
+    HomeAssistantDiscoveryTimeoutError,
     LocationLookupError,
     SourceConflictError,
     UnknownInstanceError,
@@ -311,6 +314,45 @@ def create_app(
         service: WeatherService = Depends(get_service),
     ) -> ObservationSourcesInfo:
         return service.observation_sources_status()
+
+    @app.get(
+        "/api/observation-sources/home-assistant/instances/{instance_id}/entities",
+        response_model=List[HomeAssistantEntityInfo],
+        dependencies=protected,
+    )
+    async def discover_home_assistant_entities(
+        instance_id: str,
+        response: Response,
+        search: str = Query(min_length=1, max_length=100),
+        service: WeatherService = Depends(get_service),
+    ) -> List[HomeAssistantEntityInfo]:
+        response.headers["Cache-Control"] = "no-store"
+        if not search.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="search must not be blank",
+            )
+        try:
+            return await service.discover_home_assistant_entities(
+                instance_id, search.strip()
+            )
+        except UnknownInstanceError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Unknown Home Assistant instance '{exc}'",
+            ) from exc
+        except ConflictError as exc:
+            raise _conflict(exc) from exc
+        except HomeAssistantDiscoveryTimeoutError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="Home Assistant entity search timed out",
+            ) from exc
+        except HomeAssistantDiscoveryError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Could not query Home Assistant entities",
+            ) from exc
 
     @app.post(
         "/api/observation-sources/home-assistant/instances",

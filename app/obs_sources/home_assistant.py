@@ -11,9 +11,10 @@ Assistant instance and a location, and are tagged with the matching
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -26,7 +27,7 @@ from ..config import (
     Measurement,
     Settings,
 )
-from ..models import Observation
+from ..models import HomeAssistantEntityInfo, Observation
 from .base import ObservationSource, register
 
 LOGGER = logging.getLogger(__name__)
@@ -182,6 +183,90 @@ def effective_measurements(settings: Settings) -> List[Measurement]:
 
 def _usable(instance: Optional[HomeAssistantInstance]) -> bool:
     return bool(instance and instance.url and instance.token)
+
+
+def validate_discovery_url(instance: HomeAssistantInstance) -> str:
+    """Return a safe HTTP(S) base URL without credentials or URL parameters."""
+    value = (instance.url or "").strip()
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        _ = parsed.port  # Validate malformed port numbers before making a request.
+    except ValueError as exc:
+        raise ValueError("invalid Home Assistant URL") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("invalid Home Assistant URL")
+    return value.rstrip("/")
+
+
+async def discover_entities(
+    client: httpx.AsyncClient, instance: HomeAssistantInstance, search: str
+) -> List[HomeAssistantEntityInfo]:
+    """Return current HA state entities matching a friendly name or entity ID."""
+    base_url = validate_discovery_url(instance)
+    if not instance.token:
+        raise ValueError("Home Assistant instance is not configured")
+    needle = search.strip().casefold()
+    if not needle:
+        return []
+
+    response = await client.get(
+        f"{base_url}/api/states",
+        headers={"Authorization": f"{AUTH_SCHEME} {instance.token}"},
+        follow_redirects=False,
+    )
+    response.raise_for_status()
+    states = response.json()
+    if not isinstance(states, list):
+        raise ValueError("invalid Home Assistant state response")
+
+    entities: List[HomeAssistantEntityInfo] = []
+    for item in states:
+        if not isinstance(item, dict):
+            continue
+        entity_id = item.get("entity_id")
+        if not isinstance(entity_id, str) or not entity_id:
+            continue
+        attributes = item.get("attributes")
+        if not isinstance(attributes, dict):
+            attributes = {}
+        name = attributes.get("friendly_name")
+        if not isinstance(name, str) or not name.strip():
+            name = entity_id
+        if needle not in name.casefold() and needle not in entity_id.casefold():
+            continue
+
+        raw_unit = attributes.get("unit_of_measurement")
+        unit = raw_unit.strip() if isinstance(raw_unit, str) else None
+        raw_device_class = attributes.get("device_class")
+        device_class = (
+            raw_device_class.strip() if isinstance(raw_device_class, str) else None
+        )
+        current_value = _as_float(item.get("state"))
+        selectable = (
+            entity_id.startswith("sensor.")
+            and current_value is not None
+            and math.isfinite(current_value)
+            and unit in {"°C", "C"}
+            and device_class == "temperature"
+        )
+        entities.append(
+            HomeAssistantEntityInfo(
+                entity_id=entity_id,
+                name=name.strip(),
+                unit=unit,
+                device_class=device_class,
+                selectable=selectable,
+            )
+        )
+    return entities
 
 
 def hourly_means(

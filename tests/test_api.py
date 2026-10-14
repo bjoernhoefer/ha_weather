@@ -39,6 +39,18 @@ def test_ui_is_served(api):
     assert "ha_weather" in response.text
 
 
+def test_measurement_ui_keeps_manual_entry_and_has_accessible_entity_search(api):
+    page = api.get("/").text
+    assert 'class="bar dashboard-controls"' in page
+    assert 'id="haEntitySearch"' in page
+    assert 'id="haEntitySearchButton"' in page
+    assert 'id="haEntityResults"' in page
+    assert 'id="haEntitySearchStatus" class="muted" role="status" aria-live="polite"' in page
+    assert 'id="measurementEntity" required' in page
+    assert ".dashboard-controls { display: grid;" in page
+    assert "@media (max-width: 640px)" in page
+
+
 def test_help_and_version_history_are_served(api):
     assert 'href="/static/help.html">Help</a>' in api.get("/").text
     help_page = api.get("/static/help.html")
@@ -552,6 +564,149 @@ def test_measurements_are_coupled_with_instances_and_locations(api):
         ).status_code
         == 404
     )
+
+
+def test_home_assistant_entities_can_be_searched_and_selected(api):
+    _add_instance(api)
+
+    response = api.get(
+        "/api/observation-sources/home-assistant/instances/home/entities",
+        params={"search": "GARTEN"},
+    )
+
+    assert response.status_code == 200
+    entities = {item["entity_id"]: item for item in response.json()}
+    assert set(entities) == {
+        "sensor.garden_temperature",
+        "sensor.garten_humidity",
+        "switch.garten_light",
+        "sensor.garten_unknown",
+        "sensor.garten_fahrenheit",
+        "sensor.garten_nan",
+    }
+    assert entities["sensor.garden_temperature"] == {
+        "entity_id": "sensor.garden_temperature",
+        "name": "Garten temperature",
+        "unit": "°C",
+        "device_class": "temperature",
+        "selectable": True,
+    }
+    assert entities["sensor.garten_humidity"]["selectable"] is False
+    assert entities["switch.garten_light"]["selectable"] is False
+    assert entities["sensor.garten_unknown"]["selectable"] is False
+    assert entities["sensor.garten_fahrenheit"]["selectable"] is False
+    assert entities["sensor.garten_nan"]["selectable"] is False
+    assert "secret-token" not in response.text
+    assert response.headers["cache-control"] == "no-store"
+
+    measurement = api.post(
+        "/api/observation-sources/home-assistant/measurements",
+        json={
+            "instance_id": "home",
+            "location_id": "vienna",
+            "entity_id": entities["sensor.garden_temperature"]["entity_id"],
+            "scope": "outdoor",
+            "name": entities["sensor.garden_temperature"]["name"],
+        },
+    )
+    assert measurement.status_code == 201
+    assert measurement.json()["home_assistant"]["measurements"][0]["entity_id"] == (
+        "sensor.garden_temperature"
+    )
+
+
+def test_home_assistant_entity_search_matches_entity_id_and_handles_empty_query(api):
+    _add_instance(api)
+
+    matches_id = api.get(
+        "/api/observation-sources/home-assistant/instances/home/entities",
+        params={"search": "OTHER_GARDEN"},
+    )
+    assert [item["entity_id"] for item in matches_id.json()] == ["sensor.other_garden"]
+    assert matches_id.json()[0]["selectable"] is True
+
+    assert api.get(
+        "/api/observation-sources/home-assistant/instances/home/entities",
+        params={"search": "no-match"},
+    ).json() == []
+    assert api.get(
+        "/api/observation-sources/home-assistant/instances/home/entities",
+        params={"search": "   "},
+    ).status_code == 422
+
+
+def test_home_assistant_entity_search_validates_instance_and_url(api):
+    assert api.get(
+        "/api/observation-sources/home-assistant/instances/missing/entities",
+        params={"search": "garden"},
+    ).status_code == 404
+
+    _add_instance(api, name="Unconfigured", url=None, token=None)
+    assert api.get(
+        "/api/observation-sources/home-assistant/instances/unconfigured/entities",
+        params={"search": "garden"},
+    ).status_code == 409
+
+    _add_instance(
+        api,
+        name="URL credentials",
+        url="http://" + "user" + ":" + "pass" + "@homeassistant.local:8123",
+    )
+    response = api.get(
+        "/api/observation-sources/home-assistant/instances/url_credentials/entities",
+        params={"search": "garden"},
+    )
+    assert response.status_code == 409
+    assert "password" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("name", "url", "status_code"),
+    [
+        ("HA error", "http://homeassistant.error.local:8123", 502),
+        ("HA redirect", "http://homeassistant.redirect.local:8123", 502),
+        ("HA timeout", "http://homeassistant.timeout.local:8123", 504),
+    ],
+)
+def test_home_assistant_entity_search_maps_upstream_errors(api, name, url, status_code):
+    _add_instance(api, name=name, url=url)
+    response = api.get(
+        f"/api/observation-sources/home-assistant/instances/{name.lower().replace(' ', '_')}/entities",
+        params={"search": "garden"},
+    )
+    assert response.status_code == status_code
+    assert "secret-token" not in response.text
+    assert "unauthorized" not in response.text
+
+
+def test_home_assistant_entity_search_requires_public_api_key(tmp_path, client_factory):
+    settings = Settings(
+        deployment_mode="public",
+        api_keys=["weather-secret"],
+        database_path=str(tmp_path / "ha-entities-public.sqlite3"),
+    )
+    storage = Storage(settings.database_path)
+    service = WeatherService(settings, storage, client_factory=client_factory)
+    with TestClient(create_app(settings, service)) as client:
+        added = client.post(
+            "/api/observation-sources/home-assistant/instances",
+            json={
+                "name": "Home",
+                "url": "http://homeassistant.local:8123",
+                "token": "secret-token",
+            },
+            headers={"X-API-Key": "weather-secret"},
+        )
+        assert added.status_code == 201
+        path = "/api/observation-sources/home-assistant/instances/home/entities"
+        assert client.get(path, params={"search": "garden"}).status_code == 401
+        response = client.get(
+            path,
+            params={"search": "garden"},
+            headers={"X-API-Key": "weather-secret"},
+        )
+        assert response.status_code == 200
+    storage.close()
 
 
 def test_measurement_validation(api):

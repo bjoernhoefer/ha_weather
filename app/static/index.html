@@ -37,6 +37,15 @@
       .eyebrow { margin: 0 0 .35rem; color: var(--accent); font-size: .75rem; font-weight: 750; letter-spacing: .13em; text-transform: uppercase; }
       .bar { display: flex; gap: .65rem; align-items: center; flex-wrap: wrap; }
       body > section.bar { padding: 1.1rem 1.25rem; background: var(--surface); border: 1px solid var(--border); border-radius: 1rem; box-shadow: var(--shadow); }
+      .dashboard-controls { display: grid; grid-template-columns: minmax(10rem, .85fr) repeat(3, minmax(9rem, 1fr)); align-items: end; gap: .65rem; }
+      .dashboard-controls .dashboard-location { display: grid; gap: .3rem; align-content: end; min-width: 0; }
+      .dashboard-controls select, .dashboard-controls button { width: 100%; min-width: 0; }
+      .entity-discovery { display: grid; gap: .45rem; flex: 1 1 100%; min-width: 0; padding: .8rem; border: 1px solid var(--border); border-radius: .75rem; background: var(--surface-soft); }
+      .entity-discovery .entity-search-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .65rem; align-items: end; }
+      .entity-discovery label { display: grid; gap: .3rem; min-width: 0; }
+      .entity-discovery input, .entity-discovery select { width: 100%; min-width: 0; }
+      .entity-discovery select { min-height: 7rem; }
+      .entity-discovery [role="status"] { min-height: 1.2rem; margin: 0; }
       label { color: var(--muted); font-size: .85rem; font-weight: 600; }
       input, select, button {
         min-height: 2.5rem;
@@ -120,7 +129,15 @@
         body > section.bar > label:first-child { width: 100%; }
         body > section.bar > label:first-child select { width: 100%; margin-top: .3rem; }
         body > section.bar button { flex: 1 1 auto; }
+        .dashboard-controls { grid-template-columns: minmax(0, 1fr); }
+        .dashboard-controls .dashboard-location { grid-template-columns: minmax(0, 1fr); }
+        .dashboard-controls button { flex: initial; }
+        .entity-discovery .entity-search-controls { grid-template-columns: minmax(0, 1fr); }
         details.fold { padding: 1rem; }
+      }
+      @media (min-width: 641px) and (max-width: 900px) {
+        .dashboard-controls { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .dashboard-controls .dashboard-location { grid-column: 1 / -1; grid-template-columns: minmax(6rem, .25fr) minmax(0, 1fr); align-items: center; }
       }
     </style>
   </head>
@@ -133,8 +150,8 @@
       <nav aria-label="Site navigation"><a href="/static/help.html">Help</a></nav>
     </header>
 
-    <section class="bar">
-      <label>Location<br /><select id="location" aria-label="Location"></select></label>
+    <section class="bar dashboard-controls" aria-label="Dashboard controls">
+      <label class="dashboard-location"><span>Location</span><select id="location" aria-label="Location"></select></label>
       <button id="reload">Reload</button>
       <button id="refresh">Refresh forecast</button>
       <button id="verify">Verify with Azure AI Foundry</button>
@@ -314,6 +331,21 @@
           </select>
         </label>
         <label>Name <input id="measurementName" maxlength="100" placeholder="optional" /></label>
+        <div class="entity-discovery" aria-describedby="haEntitySearchDescription">
+          <p id="haEntitySearchDescription" class="muted">
+            Search currently available Home Assistant entities by display name or ID. Only numeric temperature sensors in &deg;C can be selected; other matches are shown for reference.
+          </p>
+          <div class="entity-search-controls">
+            <label for="haEntitySearch">Search entity names
+              <input id="haEntitySearch" maxlength="100" placeholder="e.g. Garten" autocomplete="off" />
+            </label>
+            <button type="button" id="haEntitySearchButton">Search entities</button>
+          </div>
+          <label for="haEntityResults">Matching entities
+            <select id="haEntityResults" size="5" disabled aria-describedby="haEntitySearchStatus"></select>
+          </label>
+          <p id="haEntitySearchStatus" class="muted" role="status" aria-live="polite"></p>
+        </div>
         <button type="submit" id="measurementSubmit">Add measurement</button>
         <button type="button" id="measurementCancel" hidden>Cancel</button>
       </form>
@@ -940,6 +972,104 @@
       let editingMeasurement = null;
       let editingEsInstance = null;
       let editingEsMeasurement = null;
+      let entitySearchRequest = 0;
+      let discoveredEntities = [];
+      let selectedDiscoveredMeasurement = null;
+
+      function clearEntityDiscovery(message = "") {
+        entitySearchRequest++;
+        discoveredEntities = [];
+        $("haEntityResults").textContent = "";
+        $("haEntityResults").disabled = true;
+        $("haEntitySearchButton").disabled = false;
+        $("haEntitySearchStatus").textContent = message;
+      }
+
+      async function searchHomeAssistantEntities() {
+        const instanceId = $("measurementInstance").value;
+        const search = $("haEntitySearch").value.trim();
+        if (!instanceId) {
+          clearEntityDiscovery("Choose a Home Assistant instance first.");
+          return;
+        }
+        if (!search) {
+          clearEntityDiscovery("Enter a name or part of an entity ID to search.");
+          $("haEntitySearch").focus();
+          return;
+        }
+
+        const request = ++entitySearchRequest;
+        const results = $("haEntityResults");
+        const button = $("haEntitySearchButton");
+        results.textContent = "";
+        results.disabled = true;
+        button.disabled = true;
+        $("haEntitySearchStatus").textContent = "Searching Home Assistant…";
+        try {
+          const entities = await api(
+            `/api/observation-sources/home-assistant/instances/${encodeURIComponent(instanceId)}/entities?search=${encodeURIComponent(search)}`
+          );
+          if (request !== entitySearchRequest || $("measurementInstance").value !== instanceId) return;
+          discoveredEntities = entities;
+          entities.forEach((entity) => {
+            const option = document.createElement("option");
+            option.value = entity.entity_id;
+            option.textContent =
+              `${entity.name} — ${entity.entity_id}` +
+              (entity.unit ? ` (${entity.unit})` : " (unit unknown)") +
+              (entity.selectable ? "" : " — not a numeric Celsius temperature sensor");
+            option.disabled = !entity.selectable;
+            results.appendChild(option);
+          });
+          results.disabled = !entities.some((entity) => entity.selectable);
+          $("haEntitySearchStatus").textContent = entities.length
+            ? `${entities.length} matching entity/entities. Choose an enabled temperature sensor to fill the measurement form.`
+            : "No matching Home Assistant entities. Try another name or entity ID.";
+        } catch (error) {
+          if (request === entitySearchRequest) {
+            $("haEntitySearchStatus").textContent = error.message;
+          }
+        } finally {
+          if (request === entitySearchRequest) button.disabled = false;
+        }
+      }
+
+      $("haEntitySearchButton").addEventListener("click", searchHomeAssistantEntities);
+      $("haEntitySearch").addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          searchHomeAssistantEntities();
+        }
+      });
+      $("haEntityResults").addEventListener("change", () => {
+        const entity = discoveredEntities.find(
+          (item) => item.entity_id === $("haEntityResults").value
+        );
+        if (!entity?.selectable) return;
+        const instanceId = $("measurementInstance").value;
+        $("measurementEntity").value = entity.entity_id;
+        $("measurementName").value = entity.name;
+        selectedDiscoveredMeasurement = {
+          instanceId,
+          entityId: entity.entity_id,
+        };
+        $("haEntitySearchStatus").textContent =
+          `${entity.name} selected. Choose a location and save the outdoor measurement.`;
+      });
+      $("measurementInstance").addEventListener("change", () => {
+        if (
+          selectedDiscoveredMeasurement &&
+          selectedDiscoveredMeasurement.instanceId !== $("measurementInstance").value
+        ) {
+          $("measurementEntity").value = "";
+          $("measurementName").value = "";
+          selectedDiscoveredMeasurement = null;
+        }
+        clearEntityDiscovery("Search again to find entities on this instance.");
+      });
+      $("measurementEntity").addEventListener("input", () => {
+        selectedDiscoveredMeasurement = null;
+      });
 
       function locationName(locationId) {
         const location = locations.find((item) => item.id === locationId);
@@ -1007,10 +1137,23 @@
         $("homeAssistantState").textContent =
           `${ha.instances.length} instance(s), ${measurements} measurement(s); ` +
           (ha.enabled ? "Home Assistant measurements are used." : "Home Assistant measurements are not used yet.");
+        const measurementInstance = $("measurementInstance");
+        const previousInstance = measurementInstance.value;
         fillSelect(
-          $("measurementInstance"),
+          measurementInstance,
           ha.instances.map((instance) => [instance.id, instance.name])
         );
+        if (measurementInstance.value !== previousInstance) {
+          if (
+            selectedDiscoveredMeasurement &&
+            selectedDiscoveredMeasurement.instanceId !== measurementInstance.value
+          ) {
+            $("measurementEntity").value = "";
+            $("measurementName").value = "";
+            selectedDiscoveredMeasurement = null;
+          }
+          clearEntityDiscovery("Search again to find entities on this instance.");
+        }
       }
 
       function renderMeasurements(ha) {
@@ -1208,6 +1351,7 @@
             method: editingInstance ? "PUT" : "POST",
             body: JSON.stringify(payload),
           }));
+          clearEntityDiscovery("Search again after changing the Home Assistant instance.");
           setStatus(`Home Assistant instance ${payload.name} ${editingInstance ? "saved" : "added"}.`);
           resetInstanceForm();
         } catch (error) { setStatus(error.message); }
@@ -1215,12 +1359,14 @@
 
       function resetMeasurementForm() {
         editingMeasurement = null;
+        selectedDiscoveredMeasurement = null;
         const instance = $("measurementInstance").value;
         $("measurementForm").reset();
         if (instance) $("measurementInstance").value = instance;
         $("measurementLocation").value = $("location").value;
         $("measurementSubmit").textContent = "Add measurement";
         $("measurementCancel").hidden = true;
+        clearEntityDiscovery("Choose an instance and search for an entity.");
       }
 
       function startMeasurementEdit(measurement) {
@@ -1232,6 +1378,7 @@
         $("measurementName").value = measurement.name || "";
         $("measurementSubmit").textContent = "Save measurement";
         $("measurementCancel").hidden = false;
+        selectedDiscoveredMeasurement = null;
         $("measurementEntity").focus();
       }
 

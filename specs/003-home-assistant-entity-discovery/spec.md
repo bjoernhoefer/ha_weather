@@ -20,8 +20,8 @@ A user configures a Home Assistant instance with its URL and long-lived token, s
 
 **Acceptance Scenarios**:
 
-1. **Given** a saved Home Assistant instance with valid credentials, **When** the user searches for “Garten,” **Then** matching entity names and identifiers are shown without exposing the token.
-2. **Given** matching entities are shown, **When** the user selects one and submits it for a location as an outdoor measurement, **Then** it is saved and appears in the measurements list.
+1. **Given** a saved Home Assistant instance with valid credentials, **When** the user searches for “Garten,” **Then** matching entity names and identifiers are shown without exposing the token, and each result makes clear whether it can be used as a Celsius temperature measurement.
+2. **Given** a matching entity reports a numeric Celsius temperature, **When** the user selects it and submits it for a location as an outdoor measurement, **Then** it is saved and appears in the measurements list.
 3. **Given** no matching entities exist, **When** the search completes, **Then** the user sees a clear empty-result message and can change the search.
 
 ---
@@ -46,7 +46,7 @@ A user opens the weather dashboard and sees the location label, selector, and ad
 - A search term is empty or only whitespace.
 - No entity name matches; matching is case-insensitive.
 - Entity names contain non-ASCII characters or punctuation.
-- The result list is large or includes entities that are not suitable temperature measurements.
+- The result list includes non-temperature entities, unknown units, or non-numeric states.
 - A user changes the Home Assistant instance after results have been fetched.
 - Toolbar labels or button text wrap at small viewport widths.
 
@@ -58,14 +58,15 @@ A user opens the weather dashboard and sees the location label, selector, and ad
 - **FR-002**: Search results MUST identify each entity by its Home Assistant entity identifier and display name.
 - **FR-003**: Search MUST find case-insensitive occurrences of the term in an entity's display name or identifier.
 - **FR-004**: The system MUST use the configured instance credentials for discovery and MUST NOT return or display the long-lived token in the results.
-- **FR-005**: Users MUST be able to select a result and use it to create an outdoor measurement for a chosen location using the existing measurement workflow.
-- **FR-006**: Discovery failures and empty results MUST be communicated clearly without discarding other saved instance or measurement configuration.
-- **FR-007**: The dashboard's first toolbar row MUST present its location control and actions with consistent alignment, spacing, and responsive behavior.
-- **FR-008**: Selecting an entity MUST retain the existing ability to enter or edit an entity identifier manually.
+- **FR-005**: Search results MUST identify whether each match is a `sensor` entity with a numeric current value and a Celsius (`°C` or `C`) unit; only such results can be selected as a discovered temperature source.
+- **FR-006**: Users MUST be able to select an eligible result and use it to create an outdoor measurement for a chosen location using the existing measurement workflow.
+- **FR-007**: Discovery failures and empty results MUST be communicated clearly without discarding other saved instance or measurement configuration.
+- **FR-008**: The dashboard's first toolbar row MUST present its location control and actions with consistent alignment, spacing, and responsive behavior.
+- **FR-009**: Selecting an entity MUST retain the existing ability to enter or edit an entity identifier manually.
 
 ### Key Entities *(include if feature involves data)*
 
-- **Home Assistant entity**: A remotely discovered entity identified by its entity ID and user-facing display name.
+- **Home Assistant entity**: A remotely discovered entity identified by its entity ID, user-facing display name, unit, and whether its current numeric value and metadata qualify it as a Celsius temperature source.
 - **Outdoor measurement**: A selected Home Assistant entity associated with one configured instance and one location, used as a real-world outdoor observation source.
 
 ## Success Criteria *(mandatory)*
@@ -82,6 +83,7 @@ A user opens the weather dashboard and sees the location label, selector, and ad
 - Home Assistant entity discovery is available only for saved instances with a configured URL and token.
 - Users may still enter an entity identifier manually when discovery is unavailable or an entity is not returned.
 - Discovery results are used to configure the existing outdoor measurement workflow; this feature does not change how observations are aggregated or scored.
+- Only `sensor` entities with a numeric current value and a Celsius (`°C` or `C`) unit are selectable from discovery results; other name matches remain visible as ineligible. Existing manual measurement behavior is unchanged.
 - Search is performed on demand and matches entity display names and identifiers without changing Home Assistant state.
 - The visual alignment request refers to the dashboard's first control row shown in the supplied image.
 

@@ -1,129 +1,93 @@
-# Implementation Plan: [FEATURE]
+# Implementation Plan: Home Assistant Entity Discovery and UI Alignment
 
-**Branch**: `[###-feature-name]` | **Date**: [DATE] | **Spec**: [link]
+**Branch**: `003-home-assistant-entity-discovery` | **Date**: 2026-10-14 | **Spec**: [spec.md](spec.md)
 
-**Input**: Feature specification from `/specs/[###-feature-name]/spec.md`
-
-**Note**: This template is filled in by the `/speckit-plan` command; its definition describes the execution workflow.
+**Input**: Feature specification from `/specs/003-home-assistant-entity-discovery/spec.md`
 
 ## Summary
 
-[Extract from feature spec: primary requirement + technical approach from research]
+Let users search Home Assistant entity friendly names and IDs after configuring an instance, select a result for the existing outdoor measurement workflow, and retain manual ID entry. Correct the first dashboard toolbar so its location selector and action buttons align consistently on desktop and mobile. No observation aggregation, scoring, persisted measurement, or existing weather contract changes.
 
 ## Technical Context
 
-<!--
-  ACTION REQUIRED: Replace the content in this section with the technical details
-  for the project. The structure here is presented in advisory capacity to guide
-  the iteration process.
--->
+**Language/Version**: Python 3.11+ and browser-native HTML/CSS/JavaScript
 
-**Language/Version**: [e.g., Python 3.11, Swift 5.9, Rust 1.75 or NEEDS CLARIFICATION]
+**Primary Dependencies**: Existing FastAPI, Pydantic, httpx, static UI; no new dependencies
 
-**Primary Dependencies**: [e.g., FastAPI, UIKit, LLVM or NEEDS CLARIFICATION]
+**Storage**: Existing SQLite instance and measurement storage; discovery results are transient
 
-**Storage**: [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
+**Testing**: pytest using existing offline HTTPX MockTransport fixtures
 
-**Testing**: [e.g., pytest, XCTest, cargo test or NEEDS CLARIFICATION]
+**Target Platform**: Existing Linux-hosted FastAPI service and responsive web UI
 
-**Target Platform**: [e.g., Linux server, iOS 15+, WASM or NEEDS CLARIFICATION]
+**Project Type**: Web service with embedded static UI
 
-**Project Type**: [e.g., library/cli/web-service/mobile-app/compiler/desktop-app or NEEDS CLARIFICATION]
+**Performance Goals**: On-demand discovery completes within the configured outgoing-request timeout; entity search results remain responsive for ordinary Home Assistant installations.
 
-**Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps or NEEDS CLARIFICATION]
+**Constraints**: Use the saved instance credentials only on the server; require existing API authentication in public mode; don't return secrets or raw upstream error details; only mark numeric `sensor` entities with Celsius (`°C` or `C`) units selectable; preserve manual entry and existing measurement semantics.
 
-**Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable or NEEDS CLARIFICATION]
-
-**Scale/Scope**: [domain-specific, e.g., 10k users, 1M LOC, 50 screens or NEEDS CLARIFICATION]
+**Scale/Scope**: One on-demand search request against one configured Home Assistant instance; no new storage or background process.
 
 ## Constitution Check
 
-*GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
-
-[Gates determined based on constitution file]
+- **Architecture**: Pass. Reuse the current service, Home Assistant REST integration, FastAPI routes, and static UI.
+- **Scientific data and contracts**: Pass. Selected entities use existing outdoor measurement and history semantics; no measurements are fabricated and existing forecast/REST payloads stay unchanged.
+- **Configuration and persistence**: Pass. Discovery is transient and does not alter settings or SQLite schema.
+- **Verification**: Pass. Add offline tests for result mapping, matching, errors, auth, and registration behavior; visually validate desktop/mobile toolbar changes.
+- **Experience and accessibility**: Pass. Keep native form controls, keyboard-accessible selection, status feedback, responsive alignment, and existing manual entry.
+- **Documentation**: Pass. Add aligned English and German instructions for entity discovery and source selection.
 
 ## Change Scope and Persona Selection
 
-**Impact tier**: [T0 / T1 / T2 / T3, using `.github/copilot-instructions.md`]
+**Impact tier**: T2 — meaningful, cross-surface change to Home Assistant workflow, backend/API, responsive UI, and user documentation.
 
-**Affected surfaces**: [Backend/providers, API/data, Home Assistant, web UI,
-documentation, deployment, or other]
+**Affected surfaces**: FastAPI/service and Home Assistant entity listing; authenticated web API; measurement form and dashboard toolbar; English and German Home Assistant guidance; offline tests.
 
-**Personas consulted**: [Selected personas and the specific question each
-reviewed; for T0/T1, record inline review or explain why none was needed]
+**Personas consulted**:
+- UI/UX developer — desktop/mobile toolbar symmetry, measurement-form integration, and accessibility.
+- Home Assistant enthusiast — entity discovery, result usability, and Home Assistant failure behavior.
+- Python architecture developer — backend layering, API errors, timeout handling, and offline tests.
+- Quality and Documentation — regression coverage and bilingual user guidance.
 
-**Personas not consulted**: [Only where helpful, explain why a potentially
-relevant persona was out of scope]
+**Personas not consulted**:
+- EUMETSAT specialist — no satellite product, observation, or nowcasting behavior is affected.
 
-**Compatibility and risk notes**: [API, stored data, configuration, provider
-semantics, UI, Home Assistant, and rollback implications as applicable]
+**Compatibility and risk notes**: Existing measurement records, instance configuration, API key protection, weather forecasts, and `/api/homeassistant/{location_id}` are unchanged. Because history values are interpreted as Celsius without unit conversion, discovery must visibly distinguish and only enable numeric sensor entities with Celsius units; other matching entities remain inspectable but cannot be selected. Discovery must not reveal long-lived tokens or upstream response bodies and must fail without modifying stored measurements.
 
 ## Project Structure
 
 ### Documentation (this feature)
 
 ```text
-specs/[###-feature]/
-├── plan.md              # This file (/speckit-plan command output)
-├── research.md          # Phase 0 output (/speckit-plan command)
-├── data-model.md        # Phase 1 output (/speckit-plan command)
-├── quickstart.md        # Phase 1 output (/speckit-plan command)
-├── contracts/           # Phase 1 output (/speckit-plan command)
-└── tasks.md             # Phase 2 output (/speckit-tasks command - NOT created by /speckit-plan)
+specs/003-home-assistant-entity-discovery/
+├── plan.md
+├── research.md
+├── data-model.md
+├── quickstart.md
+├── contracts/
+│   └── home-assistant-entities.md
+└── tasks.md
 ```
 
 ### Source Code (repository root)
-<!--
-  ACTION REQUIRED: Replace the placeholder tree below with the concrete layout
-  for this feature. Delete unused options and expand the chosen structure with
-  real paths (e.g., apps/admin, packages/something). The delivered plan must
-  not include Option labels.
--->
 
 ```text
-# [REMOVE IF UNUSED] Option 1: Single project (DEFAULT)
-src/
-├── models/
-├── services/
-├── cli/
-└── lib/
-
+app/
+├── main.py                         # authenticated discovery route
+├── models.py                       # entity result response model
+├── service.py                      # stored instance lookup and HA request
+├── static/index.html               # search/select flow and toolbar layout
+└── obs_sources/home_assistant.py   # HA entity request/matching helper
+docs/
+├── home-assistant.md               # English discovery instructions
+└── home-assistant.de.md            # German discovery instructions
 tests/
-├── contract/
-├── integration/
-└── unit/
-
-# [REMOVE IF UNUSED] Option 2: Web application (when "frontend" + "backend" detected)
-backend/
-├── src/
-│   ├── models/
-│   ├── services/
-│   └── api/
-└── tests/
-
-frontend/
-├── src/
-│   ├── components/
-│   ├── pages/
-│   └── services/
-└── tests/
-
-# [REMOVE IF UNUSED] Option 3: Mobile + API (when "iOS/Android" detected)
-api/
-└── [same as backend above]
-
-ios/ or android/
-└── [platform-specific structure: feature modules, UI flows, platform tests]
+├── conftest.py                     # deterministic HA entity API response
+└── test_api.py                     # discovery contract and failure cases
 ```
 
-**Structure Decision**: [Document the selected structure and reference the real
-directories captured above]
+**Structure Decision**: Extend the existing FastAPI service and embedded static UI; no separate application, frontend framework, or new storage abstraction.
 
 ## Complexity Tracking
 
-> **Fill ONLY if Constitution Check has violations that must be justified**
-
-| Violation | Why Needed | Simpler Alternative Rejected Because |
-|-----------|------------|-------------------------------------|
-| [e.g., 4th project] | [current need] | [why 3 projects insufficient] |
-| [e.g., Repository pattern] | [specific problem] | [why direct DB access insufficient] |
+No constitution violations.

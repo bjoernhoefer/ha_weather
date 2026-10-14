@@ -41,6 +41,7 @@ from .models import (
     ElasticsearchSettingsInfo,
     ForecastHistory,
     HistoryHour,
+    HomeAssistantEntityInfo,
     HomeAssistantInstanceIn,
     HomeAssistantInstanceInfo,
     HomeAssistantSettingsInfo,
@@ -64,8 +65,10 @@ from .obs_sources import ObservationSource, registered_sources
 from .obs_sources import elasticsearch as es_source
 from .obs_sources.home_assistant import (
     HomeAssistantObservationSource,
+    discover_entities,
     effective_instances,
     effective_measurements,
+    validate_discovery_url,
 )
 from .obs_sources.open_meteo import fetch_hourly_observations
 from .providers import WeatherProvider, build_providers, registered_providers
@@ -101,6 +104,14 @@ class ConflictError(ValueError):
 
 class UnknownInstanceError(LookupError):
     """Raised when a Home Assistant instance id is not known."""
+
+
+class HomeAssistantDiscoveryError(RuntimeError):
+    """Raised when a Home Assistant entity request fails."""
+
+
+class HomeAssistantDiscoveryTimeoutError(HomeAssistantDiscoveryError):
+    """Raised when a Home Assistant entity request times out."""
 
 
 class UnknownMeasurementError(LookupError):
@@ -424,6 +435,28 @@ class WeatherService:
         self.storage.delete_ha_instance(instance_id)
         self.activity.record(ActivityEvent.HA_INSTANCE_DELETED)
         return self.observation_sources_status()
+
+    async def discover_home_assistant_entities(
+        self, instance_id: str, search: str
+    ) -> List[HomeAssistantEntityInfo]:
+        """Search current entities on one configured Home Assistant instance."""
+        instance = effective_instances(self.observation_settings()).get(instance_id)
+        if instance is None:
+            raise UnknownInstanceError(instance_id)
+        if not instance.url or not instance.token:
+            raise ConflictError("Home Assistant instance is not configured")
+        try:
+            validate_discovery_url(instance)
+        except ValueError as exc:
+            raise ConflictError("Home Assistant instance URL is invalid") from exc
+
+        try:
+            async with self._client_factory() as client:
+                return await discover_entities(client, instance, search)
+        except httpx.TimeoutException as exc:
+            raise HomeAssistantDiscoveryTimeoutError from exc
+        except Exception as exc:  # noqa: BLE001 - upstream details may contain secrets
+            raise HomeAssistantDiscoveryError from exc
 
     def _check_measurement(
         self, body: MeasurementIn, ignore_id: Optional[int] = None

@@ -278,6 +278,16 @@ class HomeAssistantInstanceInfo(BaseModel):
     measurement_count: int = 0
 
 
+class HomeAssistantEntityInfo(BaseModel):
+    """A Home Assistant entity discovered for optional measurement setup."""
+
+    entity_id: str
+    name: str
+    unit: Optional[str] = None
+    device_class: Optional[str] = None
+    selectable: bool = False
+
+
 class MeasurementIn(BaseModel):
     """A Home Assistant sensor coupled with an instance and a location."""
 

@@ -11,9 +11,11 @@
 1. Open **Real world measurements → Home Assistant instances** and save a configured instance.
 2. In the measurement form, choose that instance and a location.
 3. Search for part of an entity display name, for example `Garten`.
-4. Confirm matching entity names and IDs appear; select an outdoor temperature entity.
-5. Save the outdoor measurement and confirm it appears in the measurement list.
+4. Confirm currently available matching entity names and IDs appear. Only results with a numeric state, temperature device class, and Celsius unit can be selected.
+5. Select an eligible result, choose the location and outdoor scope, save it, and confirm it appears in the measurement list.
 6. Confirm manual entry remains available and that an invalid/unreachable instance displays an understandable error without showing its token.
+
+Discovery reads current Home Assistant states, not the full entity registry. Redirects and URLs containing embedded credentials are rejected; local/private Home Assistant URLs remain supported.
 
 ## Validate responsive alignment
 

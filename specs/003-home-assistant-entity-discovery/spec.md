@@ -58,7 +58,7 @@ A user opens the weather dashboard and sees the location label, selector, and ad
 - **FR-002**: Search results MUST identify each entity by its Home Assistant entity identifier and display name.
 - **FR-003**: Search MUST find case-insensitive occurrences of the term in an entity's display name or identifier.
 - **FR-004**: The system MUST use the configured instance credentials for discovery and MUST NOT return or display the long-lived token in the results.
-- **FR-005**: Search results MUST identify whether each match is a `sensor` entity with a numeric current value and a Celsius (`°C` or `C`) unit; only such results can be selected as a discovered temperature source.
+- **FR-005**: Search results MUST identify whether each match is a `sensor` entity with device class `temperature`, a numeric current value, and a Celsius (`°C` or `C`) unit; only such results can be selected as a discovered temperature source.
 - **FR-006**: Users MUST be able to select an eligible result and use it to create an outdoor measurement for a chosen location using the existing measurement workflow.
 - **FR-007**: Discovery failures and empty results MUST be communicated clearly without discarding other saved instance or measurement configuration.
 - **FR-008**: The dashboard's first toolbar row MUST present its location control and actions with consistent alignment, spacing, and responsive behavior.
@@ -83,8 +83,9 @@ A user opens the weather dashboard and sees the location label, selector, and ad
 - Home Assistant entity discovery is available only for saved instances with a configured URL and token.
 - Users may still enter an entity identifier manually when discovery is unavailable or an entity is not returned.
 - Discovery results are used to configure the existing outdoor measurement workflow; this feature does not change how observations are aggregated or scored.
-- Only `sensor` entities with a numeric current value and a Celsius (`°C` or `C`) unit are selectable from discovery results; other name matches remain visible as ineligible. Existing manual measurement behavior is unchanged.
-- Search is performed on demand and matches entity display names and identifiers without changing Home Assistant state.
+- Only `sensor` entities with device class `temperature`, a numeric current value, and a Celsius (`°C` or `C`) unit are selectable from discovery results; other name matches remain visible as ineligible. Existing manual measurement behavior is unchanged.
+- Search is performed on demand against Home Assistant's currently available states and matches entity display names and identifiers without changing Home Assistant state; it is not a complete entity-registry browser.
+- The configured Home Assistant URL is validated before discovery; only HTTP(S) URLs without embedded credentials are accepted, while local and private network hosts remain supported.
 - The visual alignment request refers to the dashboard's first control row shown in the supplied image.
 
 ## Affected Surfaces and Compatibility

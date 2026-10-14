@@ -9,7 +9,8 @@ Transient read-only result returned from the configured Home Assistant instance.
 | `entity_id` | string | Home Assistant entity identifier; selected ID is validated by the existing measurement input rules. |
 | `name` | string | Friendly name from entity attributes, falling back to the entity ID if absent. |
 | `unit` | string or null | Home Assistant unit of measurement, when available. |
-| `selectable` | boolean | True only for a `sensor` entity with a numeric current state and a Celsius (`°C` or `C`) unit. |
+| `device_class` | string or null | Home Assistant device class, when available. |
+| `selectable` | boolean | True only for a `sensor` entity with `device_class="temperature"`, a numeric current state, and a Celsius (`°C` or `C`) unit. |
 
 Results are not persisted. The configured token and current entity state are not part of the result.
 

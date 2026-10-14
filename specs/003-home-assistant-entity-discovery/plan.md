@@ -24,7 +24,7 @@ Let users search Home Assistant entity friendly names and IDs after configuring 
 
 **Performance Goals**: On-demand discovery completes within the configured outgoing-request timeout; entity search results remain responsive for ordinary Home Assistant installations.
 
-**Constraints**: Use the saved instance credentials only on the server; require existing API authentication in public mode; don't return secrets or raw upstream error details; only mark numeric `sensor` entities with Celsius (`°C` or `C`) units selectable; preserve manual entry and existing measurement semantics.
+**Constraints**: Use the saved instance credentials only on the server; require existing API authentication in public mode; validate HTTP(S) URLs without embedded credentials, allow local/private hosts, and do not follow redirects; don't return secrets or raw upstream error details; only mark numeric `sensor` entities with temperature device class and Celsius (`°C` or `C`) units selectable; preserve manual entry and existing measurement semantics.
 
 **Scale/Scope**: One on-demand search request against one configured Home Assistant instance; no new storage or background process.
 
@@ -52,7 +52,7 @@ Let users search Home Assistant entity friendly names and IDs after configuring 
 **Personas not consulted**:
 - EUMETSAT specialist — no satellite product, observation, or nowcasting behavior is affected.
 
-**Compatibility and risk notes**: Existing measurement records, instance configuration, API key protection, weather forecasts, and `/api/homeassistant/{location_id}` are unchanged. Because history values are interpreted as Celsius without unit conversion, discovery must visibly distinguish and only enable numeric sensor entities with Celsius units; other matching entities remain inspectable but cannot be selected. Discovery must not reveal long-lived tokens or upstream response bodies and must fail without modifying stored measurements.
+**Compatibility and risk notes**: Existing measurement records, instance configuration, API key protection, weather forecasts, and `/api/homeassistant/{location_id}` are unchanged. Discovery uses Home Assistant's currently available states, not its full entity registry. Because history values are interpreted as Celsius without unit conversion, discovery must visibly distinguish and only enable numeric temperature-class sensor entities with Celsius units; other matching entities remain inspectable but cannot be selected. Validate the stored URL (HTTP(S), no embedded credentials), permit local/private hosts, and do not follow redirects so the bearer token is sent only to the configured endpoint. Discovery must not reveal long-lived tokens or upstream response bodies and must fail without modifying stored measurements.
 
 ## Project Structure
 
@@ -79,8 +79,8 @@ app/
 ├── static/index.html               # search/select flow and toolbar layout
 └── obs_sources/home_assistant.py   # HA entity request/matching helper
 docs/
-├── home-assistant.md               # English discovery instructions
-└── home-assistant.de.md            # German discovery instructions
+├── home-assistant-measurements.en.md # English discovery instructions
+└── home-assistant-measurements.de.md # German discovery instructions
 tests/
 ├── conftest.py                     # deterministic HA entity API response
 └── test_api.py                     # discovery contract and failure cases

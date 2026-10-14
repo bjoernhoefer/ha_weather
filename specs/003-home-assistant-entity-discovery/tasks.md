@@ -28,18 +28,18 @@
 
 ### Tests for User Story 1
 
-- [ ] T003 [P] [US1] Add deterministic `/api/states` responses for `homeassistant.local` in tests/conftest.py
-- [ ] T004 [P] [US1] Add API tests for matching, empty results, token secrecy, missing/unconfigured instances, upstream failures, public-mode API-key authentication, and non-temperature/non-numeric/non-Celsius result eligibility in tests/test_api.py
+- [x] T003 [P] [US1] Add deterministic `/api/states` responses for `homeassistant.local` in tests/conftest.py
+- [x] T004 [P] [US1] Add API tests for matching, empty results, token secrecy, missing/unconfigured instances, invalid URL/redirect handling, upstream failures/timeouts, public-mode API-key authentication, and non-temperature/non-numeric/non-Celsius result eligibility in tests/test_api.py
 
 ### Implementation for User Story 1
 
-- [ ] T005 [US1] Add a Home Assistant entity-result model with `entity_id`, display `name`, nullable `unit`, and a `selectable` eligibility flag in app/models.py
-- [ ] T006 [US1] Implement on-demand state retrieval, case-insensitive friendly-name/entity-ID matching, and numeric Celsius temperature eligibility in app/obs_sources/home_assistant.py
-- [ ] T007 [US1] Resolve an effective configured instance and invoke discovery via the injected HTTP client in app/service.py; fail with safe errors without changing stored measurements
-- [ ] T008 [US1] Add the authenticated discovery route and map missing instance/configuration and upstream failures to the documented responses in app/main.py
-- [ ] T009 [US1] Add search and result selection to the Home Assistant measurement form in app/static/index.html; selecting a result fills the entity ID and display name while retaining manual entry and existing save behavior
-- [ ] T010 [P] [US1] Document how to search for and select an outdoor measurement in docs/home-assistant.md and create the aligned German guide in docs/home-assistant.de.md
-- [ ] T010a [US1] Update English and German Home Assistant discovery guidance in app/static/help.html
+- [x] T005 [US1] Add a Home Assistant entity-result model with `entity_id`, display `name`, nullable `unit`, and a `selectable` eligibility flag in app/models.py
+- [x] T006 [US1] Implement on-demand current-state retrieval, case-insensitive friendly-name/entity-ID matching, and temperature-class numeric Celsius eligibility in app/obs_sources/home_assistant.py
+- [x] T007 [US1] Resolve an effective configured instance and invoke discovery via the injected HTTP client in app/service.py; distinguish timeout from other upstream errors without changing stored measurements
+- [x] T008 [US1] Add the authenticated discovery route and map missing instance (404), missing/invalid instance configuration (409), upstream failure (502), and timeout (504) in app/main.py
+- [x] T009 [US1] Add search and result selection to the Home Assistant measurement form in app/static/index.html; selecting a result fills the entity ID and display name while retaining manual entry and existing save behavior
+- [x] T010 [P] [US1] Document Home Assistant measurement discovery and selection in the aligned English/German guide pair docs/home-assistant-measurements.en.md and docs/home-assistant-measurements.de.md
+- [x] T010a [US1] Update English and German Home Assistant discovery guidance in app/static/help.html and link to the guide pair from README.md
 
 **Checkpoint**: A user can discover and save a Home Assistant outdoor sensor without manually typing its ID; manual entry still works.
 
@@ -51,11 +51,11 @@
 
 ### Tests for User Story 2
 
-- [ ] T011 [P] [US2] Add a focused served-UI regression assertion for the toolbar-specific alignment hook in tests/test_api.py
+- [x] T011 [P] [US2] Add a focused served-UI regression assertion for the toolbar-specific alignment hook in tests/test_api.py
 
 ### Implementation for User Story 2
 
-- [ ] T012 [US2] Add toolbar-scoped layout styles so the location selector and action buttons share a control baseline at desktop and wrap symmetrically on mobile in app/static/index.html
+- [x] T012 [US2] Add toolbar-scoped layout styles so the location selector and action buttons share a control baseline at desktop and wrap symmetrically on mobile in app/static/index.html
 
 **Checkpoint**: The first row matches the intended symmetry at both wide and narrow viewport sizes without affecting other `.bar` forms.
 
@@ -64,7 +64,7 @@
 **Purpose**: Validate both user journeys, documentation, and safety.
 
 - [ ] T013 [P] Run the focused discovery/API tests and full pytest suite; record exact results
-- [ ] T014 [P] Verify the English/German discovery guides and quickstart instructions agree in docs/home-assistant.md, docs/home-assistant.de.md, and specs/003-home-assistant-entity-discovery/quickstart.md
+- [ ] T014 [P] Verify the English/German discovery guides and quickstart instructions agree in docs/home-assistant-measurements.en.md, docs/home-assistant-measurements.de.md, and specs/003-home-assistant-entity-discovery/quickstart.md
 - [ ] T015 Run the quickstart validation and manually inspect the responsive first-row layout at desktop and mobile viewport widths
 
 ## Dependencies & Execution Order

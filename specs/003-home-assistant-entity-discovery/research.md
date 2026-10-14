@@ -2,13 +2,19 @@
 
 ## Decision 1: Discover the selected instance's current Home Assistant entities on demand
 
-- **Decision**: Use the existing Home Assistant states REST resource through the configured instance URL and long-lived token. Return matching entity IDs, display names, units, and a safe eligibility flag; match case-insensitively against both friendly name and entity ID. Display every match, but enable selection only for sensor entities with a numeric current state and Celsius units.
-- **Rationale**: The available states payload already contains the entity ID, current state, and attributes (including `friendly_name`), so the app can filter server-side without a new integration or changing entity state. Querying only after the user asks avoids automatic request traffic.
+- **Decision**: Use the existing Home Assistant states REST resource through the configured instance URL and long-lived token. Return matching entity IDs, display names, units, and a safe eligibility flag; match case-insensitively against both friendly name and entity ID. Display every currently available match, but enable selection only for sensor entities with a numeric current state and Celsius units.
+- **Rationale**: The states resource supplies currently available entities and their friendly names, but does not provide a full entity registry browser for disabled/unloaded entities. It allows the app to filter server-side without changing entity state. Querying only after the user asks avoids automatic request traffic.
 - **Alternatives considered**: Manually entering entity IDs only (fails the user's discovery request); querying Home Assistant directly from the browser (exposes the long-lived token and introduces cross-origin concerns); persisting every available entity (stale duplicate data and unnecessary schema changes).
+
+## Decision 1b: Limit the discovery request to the configured endpoint
+
+- **Decision**: Accept only configured HTTP(S) URLs without embedded user information; keep local/private hosts valid for Home Assistant deployments and disable redirects for discovery requests.
+- **Rationale**: The request uses a bearer token. Redirects could forward credentials outside the configured host, and non-HTTP schemes or URL-embedded credentials are unnecessary. Local/private hosts are essential for this application's Home Assistant use case.
+- **Alternatives considered**: Restricting to public hostnames (breaks local Home Assistant); allowing arbitrary URL schemes, userinfo, or redirects (unnecessary credential exposure risk).
 
 ## Decision 1a: Avoid selecting non-temperature and non-Celsius states
 
-- **Decision**: Mark as eligible only `sensor` entities with a numeric current state and `unit_of_measurement` of Celsius (`°C` or `C`). Show other matches as not selectable and explain why. Preserve existing free-text entry unchanged.
+- **Decision**: Mark as eligible only `sensor` entities with `device_class="temperature"`, a numeric current state, and `unit_of_measurement` of Celsius (`°C` or `C`). Show other matches as not selectable and explain why. Preserve existing free-text entry unchanged.
 - **Rationale**: The current HA history path converts states to numbers but does not convert or validate units; selecting humidity, Fahrenheit, or a non-numeric entity would silently pollute temperature observations and scores.
 - **Alternatives considered**: Showing every result as selectable (incorrect measurement semantics); converting Fahrenheit in this feature (history API minimal response and persisted measurements do not store units, and this expands observation behavior beyond request); hiding all other matches (does not fulfill the request to see matches).
 
@@ -33,6 +39,6 @@
 ## Validation notes
 
 - Existing tests are offline and use a shared HTTPX MockTransport fixture; add a route for Home Assistant state-list requests there.
-- Test matching by friendly name and entity ID, case insensitivity, no-result behavior, token secrecy, inaccessible/unconfigured instances, public-mode auth, and successful measurement creation after selecting a result.
+- Test matching by friendly name and entity ID, case insensitivity, no-result behavior, token secrecy, URL validation, redirect handling, timeouts/upstream errors, inaccessible/unconfigured instances, public-mode auth, and successful measurement creation after selecting a result.
 - Test the UI text/structure and inspect responsive toolbar styling; manual browser validation is supplemental to pytest.
 - Existing Home Assistant user documentation is in `docs/home-assistant.md`; add a paired German guide so setup instructions remain aligned.

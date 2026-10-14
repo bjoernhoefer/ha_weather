@@ -33,7 +33,7 @@
 
 ### Implementation for User Story 1
 
-- [x] T005 [US1] Add a Home Assistant entity-result model with `entity_id`, display `name`, nullable `unit`, and a `selectable` eligibility flag in app/models.py
+- [x] T005 [US1] Add a Home Assistant entity-result model with `entity_id`, display `name`, nullable `unit` and `device_class`, and a `selectable` eligibility flag in app/models.py
 - [x] T006 [US1] Implement on-demand current-state retrieval, case-insensitive friendly-name/entity-ID matching, and temperature-class numeric Celsius eligibility in app/obs_sources/home_assistant.py
 - [x] T007 [US1] Resolve an effective configured instance and invoke discovery via the injected HTTP client in app/service.py; distinguish timeout from other upstream errors without changing stored measurements
 - [x] T008 [US1] Add the authenticated discovery route and map missing instance (404), missing/invalid instance configuration (409), upstream failure (502), and timeout (504) in app/main.py
@@ -63,9 +63,9 @@
 
 **Purpose**: Validate both user journeys, documentation, and safety.
 
-- [ ] T013 [P] Run the focused discovery/API tests and full pytest suite; record exact results
-- [ ] T014 [P] Verify the English/German discovery guides and quickstart instructions agree in docs/home-assistant-measurements.en.md, docs/home-assistant-measurements.de.md, and specs/003-home-assistant-entity-discovery/quickstart.md
-- [ ] T015 Run the quickstart validation and manually inspect the responsive first-row layout at desktop and mobile viewport widths
+- [x] T013 [P] Run the focused discovery/API tests and full pytest suite; record exact results
+- [x] T014 [P] Verify the English/German discovery guides and quickstart instructions agree in docs/home-assistant-measurements.en.md, docs/home-assistant-measurements.de.md, and specs/003-home-assistant-entity-discovery/quickstart.md
+- [x] T015 Run the quickstart validation and inspect entity search/selection plus responsive first-row layout at desktop and mobile viewport widths
 
 ## Dependencies & Execution Order
 

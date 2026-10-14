@@ -6,7 +6,7 @@
 
 - Uses the configured Home Assistant URL and stored long-lived token for that instance.
 - Requires the same authentication as other configuration endpoints in public deployment mode.
-- `search` is required; leading/trailing whitespace is ignored and matching is case-insensitive.
+- `search` is required, at most 100 characters; leading/trailing whitespace is ignored and matching is case-insensitive.
 - Queries currently available state entities on demand (not the full entity registry) and returns entities whose friendly name or entity ID contains the search text.
 - The configured URL must use HTTP(S) and contain no embedded username/password. Local and private-network addresses are supported. Redirects are not followed.
 
@@ -20,6 +20,7 @@ HTTP `200 OK`:
     "entity_id": "sensor.garden_temperature",
     "name": "Garden temperature",
     "unit": "°C",
+    "device_class": "temperature",
     "device_class": "temperature",
     "selectable": true
   }

@@ -23,6 +23,7 @@ A user configures a Home Assistant instance with its URL and long-lived token, s
 1. **Given** a saved Home Assistant instance with valid credentials, **When** the user searches for “Garten,” **Then** matching entity names and identifiers are shown without exposing the token, and each result makes clear whether it can be used as a Celsius temperature measurement.
 2. **Given** a matching entity reports a numeric Celsius temperature, **When** the user selects it and submits it for a location as an outdoor measurement, **Then** it is saved and appears in the measurements list.
 3. **Given** no matching entities exist, **When** the search completes, **Then** the user sees a clear empty-result message and can change the search.
+4. **Given** a saved instance URL contains embedded credentials or uses a non-HTTP(S) scheme, **When** the user searches, **Then** the request is rejected without sending the Home Assistant token to that URL.
 
 ---
 
@@ -63,6 +64,7 @@ A user opens the weather dashboard and sees the location label, selector, and ad
 - **FR-007**: Discovery failures and empty results MUST be communicated clearly without discarding other saved instance or measurement configuration.
 - **FR-008**: The dashboard's first toolbar row MUST present its location control and actions with consistent alignment, spacing, and responsive behavior.
 - **FR-009**: Selecting an entity MUST retain the existing ability to enter or edit an entity identifier manually.
+- **FR-010**: Entity discovery MUST accept only HTTP(S) instance URLs without embedded credentials, MUST NOT follow redirects, and MUST continue to support private/local Home Assistant hosts.
 
 ### Key Entities *(include if feature involves data)*
 

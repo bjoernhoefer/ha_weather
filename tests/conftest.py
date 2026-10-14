@@ -235,6 +235,8 @@ def mock_transport(today: date) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         host = request.url.host
+        if host == "external.invalid":
+            return httpx.Response(200, json=[])
         if host and host.startswith("homeassistant."):
             if request.url.path == "/api/states":
                 if not request.headers.get("Authorization", "").startswith("Bearer "):

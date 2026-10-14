@@ -981,6 +981,7 @@
         discoveredEntities = [];
         $("haEntityResults").textContent = "";
         $("haEntityResults").disabled = true;
+        $("haEntitySearchButton").disabled = false;
         $("haEntitySearchStatus").textContent = message;
       }
 
@@ -1136,10 +1137,23 @@
         $("homeAssistantState").textContent =
           `${ha.instances.length} instance(s), ${measurements} measurement(s); ` +
           (ha.enabled ? "Home Assistant measurements are used." : "Home Assistant measurements are not used yet.");
+        const measurementInstance = $("measurementInstance");
+        const previousInstance = measurementInstance.value;
         fillSelect(
-          $("measurementInstance"),
+          measurementInstance,
           ha.instances.map((instance) => [instance.id, instance.name])
         );
+        if (measurementInstance.value !== previousInstance) {
+          if (
+            selectedDiscoveredMeasurement &&
+            selectedDiscoveredMeasurement.instanceId !== measurementInstance.value
+          ) {
+            $("measurementEntity").value = "";
+            $("measurementName").value = "";
+            selectedDiscoveredMeasurement = null;
+          }
+          clearEntityDiscovery("Search again to find entities on this instance.");
+        }
       }
 
       function renderMeasurements(ha) {
@@ -1337,6 +1351,7 @@
             method: editingInstance ? "PUT" : "POST",
             body: JSON.stringify(payload),
           }));
+          clearEntityDiscovery("Search again after changing the Home Assistant instance.");
           setStatus(`Home Assistant instance ${payload.name} ${editingInstance ? "saved" : "added"}.`);
           resetInstanceForm();
         } catch (error) { setStatus(error.message); }

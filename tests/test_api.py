@@ -487,10 +487,6 @@ def test_home_assistant_instance_ids_are_unique(api):
 
 def test_home_assistant_token_is_kept_when_not_resubmitted(api):
     _add_instance(api)
-    api.put(
-        "/api/observation-sources/home-assistant/instances/home",
-        json={"name": "Home", "url": "http://homeassistant.local:8123", "token": "test-token"},
-    )
     response = api.put(
         "/api/observation-sources/home-assistant/instances/home",
         json={"name": "Vienna flat", "url": "http://new-host:8123"},

@@ -19,7 +19,7 @@ Results are not persisted. The configured token and current entity state are not
 | Field | Type | Rules |
 | --- | --- | --- |
 | `instance_id` | string | Must resolve to a configured effective Home Assistant instance with URL and token. |
-| `search` | string | Required non-empty trimmed substring; case-insensitive match against display name or entity ID. |
+| `search` | string | Required non-empty trimmed substring of at most 100 characters; case-insensitive match against display name or entity ID. |
 
 ## Existing outdoor measurement
 

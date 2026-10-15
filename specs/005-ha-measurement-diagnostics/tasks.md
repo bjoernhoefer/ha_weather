@@ -47,8 +47,8 @@
 
 - [x] T015 [P] Update paired user guides docs/home-assistant-measurements.en.md and docs/home-assistant-measurements.de.md.
 - [x] T016 [P] Update API/setup guidance in README.md and both languages in app/static/help.html.
-- [ ] T017 Collect real regression/browser results, scan changed files for secrets and run automated review; record evidence in specs/005-ha-measurement-diagnostics/quickstart.md.
-- [ ] T018 Compare implementation with spec/plan/tasks and resolve remaining gaps in specs/005-ha-measurement-diagnostics/tasks.md.
+- [x] T017 Collect real regression/browser results, scan changed files for secrets and run automated review; record evidence in specs/005-ha-measurement-diagnostics/quickstart.md.
+- [x] T018 Compare implementation with spec/plan/tasks and resolve remaining gaps in specs/005-ha-measurement-diagnostics/tasks.md.
 
 ## Dependencies & Parallel Execution
 

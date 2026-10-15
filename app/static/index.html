@@ -574,9 +574,10 @@
             // the API key lives in the general settings
             $("settingsSection").open = true;
             apiKeyInput.focus();
-            throw new Error("401: an API key is required, please enter it in the General settings.");
+            throw Object.assign(new Error("401: an API key is required, please enter it in the General settings."),
+              { status: response.status });
           }
-          throw new Error(`${response.status}: ${detail}`);
+          throw Object.assign(new Error(`${response.status}: ${detail}`), { status: response.status });
         }
         return response.json();
       }

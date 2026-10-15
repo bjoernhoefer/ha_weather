@@ -24,6 +24,17 @@ current value, and a Celsius unit (`°C` or `C`). During entity discovery, the c
 to identify suitable candidates; recorded history supplies the daily
 observations.
 
+## Test the instance connection
+
+Use **Test connection** beside an instance to check connectivity from the
+ha_weather server and whether Home Assistant accepts its saved long-lived token.
+Save URL or token changes first; the test does not use unsaved form values.
+Environment-managed instances can also be tested despite being read-only.
+The row shows success, denied access, timeout, network failure, or an unexpected
+response without revealing credentials. No settings or measurements are changed.
+A successful connection does not guarantee usable sensors or Recorder history;
+use the separate measurement tests below for those checks.
+
 ## Test and inspect recent values
 
 Use **Test** in the measurement form before saving, or beside an existing

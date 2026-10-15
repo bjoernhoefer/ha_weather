@@ -45,6 +45,7 @@ from .models import (
     HomeAssistantEntityInfo,
     HomeAssistantInstanceIn,
     HomeAssistantInstanceInfo,
+    HomeAssistantInstanceTest,
     HomeAssistantMeasurementHistory,
     HomeAssistantMeasurementTest,
     HomeAssistantSettingsInfo,
@@ -71,6 +72,7 @@ from .obs_sources import ObservationSource, registered_sources
 from .obs_sources import elasticsearch as es_source
 from .obs_sources.home_assistant import (
     HomeAssistantObservationSource,
+    check_connection,
     discover_entities,
     effective_instances,
     effective_measurements,
@@ -494,6 +496,24 @@ class WeatherService:
         self.storage.delete_ha_instance(instance_id)
         self.activity.record(ActivityEvent.HA_INSTANCE_DELETED)
         return self.observation_sources_status()
+
+    async def test_ha_instance(self, instance_id: str) -> HomeAssistantInstanceTest:
+        instance = effective_instances(self.observation_settings()).get(instance_id)
+        if instance is None:
+            raise UnknownInstanceError(instance_id)
+        if not instance.url or not instance.token:
+            raise ConflictError("Home Assistant instance is not configured")
+        try:
+            validate_discovery_url(instance)
+        except ValueError as exc:
+            raise ConflictError("Home Assistant instance URL is invalid") from exc
+        try:
+            async with self._client_factory() as client:
+                return await check_connection(client, instance)
+        except httpx.TimeoutException:
+            return HomeAssistantInstanceTest(instance_id=instance_id, reason="timeout")
+        except httpx.RequestError:
+            return HomeAssistantInstanceTest(instance_id=instance_id, reason="connection_failed")
 
     async def discover_home_assistant_entities(
         self, instance_id: str, search: str

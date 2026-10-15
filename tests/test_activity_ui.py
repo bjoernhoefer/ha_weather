@@ -11,6 +11,82 @@ import pytest
 PAGE = Path(__file__).parents[1] / "app/static/index.html"
 
 
+def test_instance_connection_pending_results_and_recovery():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to exercise the UI JavaScript")
+    page = PAGE.read_text()
+    script = re.search(
+        r"      async function testInstanceConnection.*?(?=      function renderInstances)",
+        page, re.DOTALL,
+    ).group()
+    api_script = re.search(
+        r"      function errorText\(detail\).*?(?=      let logsRequest)",
+        page, re.DOTALL,
+    ).group()
+    javascript = r"""
+const assert = require("node:assert/strict");
+let requests = [];
+const storedApiKey = () => "test-key";
+const $ = () => ({open: false});
+const apiKeyInput = {focus() {}};
+const fetch = (path, options) => new Promise((resolve, reject) =>
+  requests.push({path, options, resolve, reject}));
+"""
+    javascript += api_script + script
+    javascript += r"""
+(async () => {
+  const status = {isConnected: true};
+  const trigger = {disabled: false};
+  let pending = testInstanceConnection({id: "home/proxy"}, status, trigger);
+  assert.equal(trigger.disabled, true);
+  assert.match(status.textContent, /Testing saved/);
+  assert.equal(requests[0].path,
+    "/api/observation-sources/home-assistant/instances/home%2Fproxy/test");
+  assert.equal(requests[0].options.method, "POST");
+  assert.equal(requests[0].options.headers["X-API-Key"], "test-key");
+  requests[0].resolve({ok: true, json: async () => ({reason: "success"})});
+  await pending;
+  assert.match(status.textContent, /API token accepted/);
+  assert.match(status.textContent, /Recorder were not checked/);
+  assert.equal(trigger.disabled, false);
+  for (const reason of ["authentication_failed", "timeout", "connection_failed", "invalid_response"]) {
+    pending = testInstanceConnection({id: "home"}, status, trigger);
+    requests.at(-1).resolve({ok: true, json: async () => ({reason})});
+    await pending;
+    assert.doesNotMatch(status.textContent, /API token accepted/);
+    assert.equal(trigger.disabled, false);
+  }
+  for (const code of [401, 403, 409, 500]) {
+    pending = testInstanceConnection({id: "home"}, status, trigger);
+    requests.at(-1).resolve({
+      ok: false, status: code, text: async () => "private upstream details"
+    });
+    await pending;
+    assert.doesNotMatch(status.textContent, /private upstream/);
+    if (code === 401 || code === 403) assert.match(status.textContent, /ha_weather API key/);
+    if (code === 409) assert.match(status.textContent, /valid Home Assistant URL and token/);
+    assert.equal(trigger.disabled, false);
+  }
+  pending = testInstanceConnection({id: "home"}, status, trigger);
+  status.isConnected = false;
+  status.textContent = "detached";
+  requests.at(-1).resolve({ok: true, json: async () => ({reason: "success"})});
+  await pending;
+  assert.equal(status.textContent, "detached");
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    subprocess.run([node, "-e", javascript], check=True, capture_output=True, text=True)
+    instance_render = page.split("function renderInstances(ha)", 1)[1].split(
+        "function renderMeasurements", 1,
+    )[0]
+    assert instance_render.index('button("Test connection"') < instance_render.index(
+        'if (instance.origin === "ui")',
+    )
+    assert 'connectionStatus.setAttribute("role", "status")' in instance_render
+    assert 'connectionStatus.setAttribute("aria-live", "polite")' in instance_render
+
+
 def test_activity_panel_markup():
     page = PAGE.read_text()
     assert re.search(

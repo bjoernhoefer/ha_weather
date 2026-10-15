@@ -23,6 +23,7 @@ from .models import (
     ForecastHistory,
     HomeAssistantEntityInfo,
     HomeAssistantInstanceIn,
+    HomeAssistantInstanceTest,
     HomeAssistantMeasurementHistory,
     HomeAssistantMeasurementTest,
     LocationForecast,
@@ -367,6 +368,24 @@ def create_app(
         body: HomeAssistantInstanceIn, service: WeatherService = Depends(get_service)
     ) -> ObservationSourcesInfo:
         return _guard_measurements(service.add_ha_instance, body)
+
+    @app.post(
+        "/api/observation-sources/home-assistant/instances/{instance_id}/test",
+        response_model=HomeAssistantInstanceTest,
+        dependencies=protected,
+    )
+    async def test_home_assistant_instance(
+        instance_id: str,
+        response: Response,
+        service: WeatherService = Depends(get_service),
+    ) -> HomeAssistantInstanceTest:
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            return await service.test_ha_instance(instance_id)
+        except UnknownInstanceError as exc:
+            raise HTTPException(404, "Unknown Home Assistant instance") from exc
+        except ConflictError as exc:
+            raise _conflict(exc) from exc
 
     async def probe_measurement(
         body: MeasurementIn,

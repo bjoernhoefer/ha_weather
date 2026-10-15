@@ -258,6 +258,7 @@ others or the forecast refresh.
 | `DELETE /api/locations/{location}` | remove a location added in the UI (environment locations are read-only) |
 | `GET /api/observation-sources` | real world measurement sources, Home Assistant instances and measurements |
 | `POST /api/observation-sources/home-assistant/instances` | add a Home Assistant instance `{"name": "Garden", "location_id": "vienna", "url": "http://ha.local:8123", "token": "..."}` |
+| `POST /api/observation-sources/home-assistant/instances/{id}/test` | read-only connection/token check using saved or environment settings; returns `instance_id` and `reason` (`success`, `authentication_failed`, `timeout`, `connection_failed`, `invalid_response`); does not check sensors or Recorder |
 | `PUT /api/observation-sources/home-assistant/instances/{id}` | update name/URL/location pairing; incompatible existing mappings are rejected; an empty token keeps the stored one |
 | `DELETE /api/observation-sources/home-assistant/instances/{id}` | remove an instance and its measurements |
 | `POST /api/observation-sources/home-assistant/measurements` | add a measurement `{"instance_id": "garden", "entity_id": "sensor.outdoor", "scope": "outdoor", "name": ""}`; location is inherited; legacy unpaired instances require explicit `location_id`, paired instances reject mismatches |

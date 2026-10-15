@@ -32,6 +32,7 @@ from ..models import (
     HomeAssistantEntityInfo,
     HomeAssistantHistoryGap,
     HomeAssistantHistorySample,
+    HomeAssistantInstanceTest,
     HomeAssistantMeasurementHistory,
     HomeAssistantMeasurementTest,
     HourlyMeasurement,
@@ -227,6 +228,29 @@ def validate_discovery_url(instance: HomeAssistantInstance) -> str:
     ):
         raise ValueError("invalid Home Assistant URL")
     return value.rstrip("/")
+
+
+async def check_connection(
+    client: httpx.AsyncClient, instance: HomeAssistantInstance,
+) -> HomeAssistantInstanceTest:
+    """Check the authenticated API root without following redirects."""
+    base_url = validate_discovery_url(instance)
+    response = await client.get(
+        f"{base_url}/api/",
+        headers={"Authorization": f"{AUTH_SCHEME} {instance.token}"},
+        follow_redirects=False,
+    )
+    reason = "invalid_response"
+    if response.status_code in (401, 403):
+        reason = "authentication_failed"
+    elif response.status_code == 200:
+        try:
+            data = response.json()
+        except ValueError:
+            data = None
+        if isinstance(data, dict) and data.get("message") == "API running.":
+            reason = "success"
+    return HomeAssistantInstanceTest(instance_id=instance.id, reason=reason)
 
 
 def _state_timestamp(value: object) -> datetime:

@@ -45,8 +45,8 @@ invalid, or unsupported values are not treated as usable temperatures.
 Connectivity, authentication and timeout failures are reported without exposing
 saved credentials. Testing does not save settings or change provider scores.
 
-Expand **Last 24 hours · HA recorder** in the full-width row below a measurement's
-compact metadata and actions to request its rolling last **24 hours** of Home
+Expand the sensor's **Last 24 hours · HA recorder** heading in the full-width row
+below a measurement's compact metadata and actions to request its rolling last **24 hours** of Home
 Assistant Recorder values. This section starts collapsed and loads only when
 opened; **Refresh history** requests recent data again.
 

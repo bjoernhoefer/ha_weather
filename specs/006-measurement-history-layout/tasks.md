@@ -15,7 +15,7 @@
 **Independent test**: Expand history; metadata stays compact and a separate
 full-width chronological UTC/Celsius table appears.
 
-- [ ] T003 [US1] Add separate history row, accessible unnumbered table and mobile styles in app/static/index.html.
+- [x] T003 [US1] Add separate history row, accessible unnumbered table and mobile styles in app/static/index.html.
 - [ ] T004 [P] [US1] Cover lazy fetch, chronological filtering, gaps, errors and detached results in tests/test_measurement_history_ui.py.
 
 ## Phase 4: US2 — Optional trend (P2)
@@ -23,13 +23,13 @@ full-width chronological UTC/Celsius table appears.
 **Independent test**: Loaded table generates no SVG until requested; chart uses
 the same window/data and breaks at gaps.
 
-- [ ] T005 [US2] Add on-click SVG with finite single/constant/negative data handling and refresh reset in app/static/index.html.
+- [x] T005 [US2] Add on-click SVG with finite single/constant/negative data handling and refresh reset in app/static/index.html.
 - [ ] T006 [P] [US2] Test lazy chart, gap segmentation and stale-chart reset in tests/test_measurement_history_ui.py.
 
 ## Phase 5: Completion
 
-- [ ] T007 [P] Update paired docs/home-assistant-measurements.de.md and docs/home-assistant-measurements.en.md.
-- [ ] T008 Remove preview-temporary/measurements-desktop.png and preview-temporary/measurements-mobile.png.
+- [x] T007 [P] Update paired docs/home-assistant-measurements.de.md and docs/home-assistant-measurements.en.md.
+- [x] T008 Remove preview-temporary/measurements-desktop.png and preview-temporary/measurements-mobile.png.
 - [ ] T009 Run relevant and full existing pytest suite; record evidence in specs/006-measurement-history-layout/quickstart.md.
 - [ ] T010 Scan changed files and run code/security review; check convergence against specs/006-measurement-history-layout/spec.md.
 

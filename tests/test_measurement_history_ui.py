@@ -24,11 +24,16 @@ class Element {
     this.disabled = false;
     this.hidden = false;
     this.className = "";
+    this.classList = {add: name => { this.className += ` ${name}`; }};
     this.text = "";
   }
   get isConnected() { return this === root || !!this.parentNode?.isConnected; }
   setAttribute(key, value) { this.attributes[key] = String(value); }
   getAttribute(key) { return this.attributes[key] ?? null; }
+  closest(tag) {
+    if (this.tag === tag) return this;
+    return this.parentNode?.closest(tag) ?? null;
+  }
   removeAttribute(key) { delete this.attributes[key]; }
   addEventListener(name, callback) { this.listeners[name] = callback; }
   append(...children) {
@@ -70,7 +75,9 @@ const document = {
 };
 const root = new Element("root");
 const elements = {measurements: new Element("tbody")};
-root.append(elements.measurements);
+const measurementTable = new Element("table");
+root.append(measurementTable);
+measurementTable.append(elements.measurements);
 const $ = id => elements[id];
 const locationName = id => `Location ${id}`;
 const OBS_ORIGINS = {ui: "web UI", environment: "environment"};
@@ -170,12 +177,12 @@ requests[0].reply(history([
   sample(23, -2), sample(0, -5), sample(3, 1),
   {timestamp: "2026-10-25T03:00:00+02:00", value: -4},
   sample(2, 999, {carried: true}), sample(4, null), sample(5, "99"),
-  sample(6, Infinity), sample(7, NaN), {timestamp: "invalid", value: 1},
+  null, sample(6, Infinity), sample(7, NaN), {timestamp: "invalid", value: 1},
   {timestamp: "2026-10-24T23:59:59Z", value: 88},
   {timestamp: "2026-10-25T23:00:01Z", value: 88},
 ], [
   {timestamp: stamp(2), reason: "<script>private</script>"},
-  {timestamp: "invalid"}, {timestamp: "2026-10-24T23:00:00Z"},
+  null, {timestamp: "invalid"}, {timestamp: "2026-10-24T23:00:00Z"},
 ]));
 await settle();
 assert.equal(svgCreations, 0, "loading history must not construct even a hidden SVG");
@@ -239,6 +246,25 @@ const linePoints = tags(chart, "polyline").map(line => line.attributes.points.sp
 assert.deepEqual(linePoints[0], x.slice(0, 2));
 assert.deepEqual(linePoints[1], x.slice(5), "isolated points are not joined through a gap");
 assert.equal(requests.length, 1);
+""")
+
+
+def test_empty_history_and_zero_duration_singleton(run_ui):
+    run_ui(r"""
+const panel = mount();
+open(panel);
+requests[0].reply(history());
+await settle();
+assert.equal(rows(panel).length, 0);
+assert.equal(svgCreations, 0);
+assert.match(panel.textContent, /No usable Celsius/);
+assert.equal(findButton(panel, "Show temperature trend").disabled, true);
+const pending = click(findButton(panel, "Refresh history"));
+requests[1].reply({...history([sample(0, 0)]), end: stamp(0)});
+await pending;
+click(findButton(panel, "Show temperature trend"));
+const chart = assertFiniteChart(panel);
+assert.equal(tags(chart, "circle").length, 1);
 """)
 
 

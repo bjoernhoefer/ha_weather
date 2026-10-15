@@ -119,7 +119,9 @@
       .ha-diagnostics details { margin-top: .65rem; padding: .6rem; border: 1px solid var(--border); border-radius: .65rem; }
       .ha-diagnostics summary { font-weight: 650; }
       .ha-measurements { display: table; table-layout: fixed; white-space: normal; overflow: visible; }
-      .ha-measurements > thead th:last-child { width: 28%; }
+      .ha-measurements > thead th { width: 10%; }
+      .ha-measurements > thead th:nth-child(2) { width: 28%; }
+      .ha-measurements > thead th:last-child { width: 22%; }
       .ha-measurements > tbody > tr > td { vertical-align: top; overflow-wrap: anywhere; padding: .5rem; }
       .ha-measurements .ha-diagnostics { min-width: 0; max-width: none; }
       .ha-measurements .ha-diagnostics .bar { flex-wrap: wrap; gap: .35rem; }
@@ -134,12 +136,15 @@
       .ha-history-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; align-items: start; }
       .ha-history-grid > * { min-width: 0; }
       .ha-history-table-wrap { max-height: 20rem; overflow: auto; }
+      .ha-history-table-wrap:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
       .ha-history-table { display: table; table-layout: fixed; white-space: normal; overflow: visible; }
       .ha-history-table caption { text-align: left; font-size: .82rem; font-weight: 650; padding: .4rem; }
       .ha-history-table th, .ha-history-table td { padding: .45rem; overflow-wrap: anywhere; }
+      .ha-history-table th:last-child, .ha-history-table td:last-child { text-align: right; }
       .ha-history-table th { position: sticky; top: 0; }
       .ha-history-table time { font-variant-numeric: tabular-nums; }
-      .ha-history-chart { margin: 0; }
+      .ha-history-chart { margin: 0; padding: .65rem; border: 1px solid var(--border); border-radius: .65rem; background: var(--surface); }
+      .ha-history-chart h4 { margin: 0 0 .5rem; font-size: .88rem; }
       .ha-history-chart svg { display: block; width: 100%; height: auto; color: var(--muted); }
       .ha-history-chart .history-gridline { stroke: var(--border); }
       .ha-history-chart .history-line { fill: none; stroke: var(--accent); stroke-width: 2; }
@@ -1316,7 +1321,7 @@
         const details = document.createElement("details");
         details.className = "ha-history";
         const summary = document.createElement("summary");
-        summary.textContent = "Last 24 hours · HA recorder";
+        summary.textContent = `${payload.name || payload.entity_id} · Last 24 hours · HA recorder`;
         summary.setAttribute("aria-label", `Last 24 hours of HA recorder history for ${payload.entity_id}`);
         const status = document.createElement("p");
         status.className = "muted";
@@ -1348,7 +1353,12 @@
         tableWrap.hidden = true;
         const chart = document.createElement("figure");
         chart.className = "ha-history-chart";
-        chart.hidden = true;
+        const chartTitle = document.createElement("h4");
+        chartTitle.textContent = "Temperature trend";
+        const chartPlaceholder = document.createElement("p");
+        chartPlaceholder.className = "muted ha-history-chart-placeholder";
+        chartPlaceholder.textContent = "Load history, then select “Show temperature trend” to plot recorded values here. No additional request is made.";
+        chart.append(chartTitle, chartPlaceholder);
         grid.append(tableWrap, chart);
         let chartData = null;
         let loaded = false;
@@ -1358,7 +1368,7 @@
         refresh.setAttribute("aria-label", `Refresh recorder history for ${payload.entity_id}`);
         const trend = button("Show temperature trend", () => {
           if (!chartData || loading || !details.isConnected) return;
-          chart.replaceChildren(measurementHistoryChart(chartData, payload.entity_id));
+          chart.replaceChildren(chartTitle, measurementHistoryChart(chartData, payload.entity_id));
           const description = document.createElement("figcaption");
           description.textContent = "UTC · °C. Points are recorded values; lines stop at explicit gaps. No values are inferred before the first or after the last point.";
           chart.appendChild(description);
@@ -1376,8 +1386,7 @@
           refresh.disabled = true;
           loaded = false;
           chartData = null;
-          chart.replaceChildren();
-          chart.hidden = true;
+          chart.replaceChildren(chartTitle, chartPlaceholder);
           trend.disabled = true;
           tableWrap.hidden = true;
           list.textContent = "";
@@ -1472,17 +1481,24 @@
         let low = Math.min(...values);
         let high = Math.max(...values);
         const padding = high === low ? Math.max(1 / scale, Math.abs(low) * .05) : (high - low) * .1;
-        low -= padding;
-        high += padding;
+        low = Math.max(-Number.MAX_VALUE / scale, low - padding);
+        high = Math.min(Number.MAX_VALUE / scale, high + padding);
         const x = (time) => 72 + (end === start ? .5 : (time - start) / (end - start)) * 424;
         const y = (value) => 220 - (value / scale - low) / (high - low) * 196;
-        const formatTick = (value) => Number(value.toPrecision(4)).toString();
+        const formatTick = (value) => {
+          const rounded = Number(value.toPrecision(4));
+          return Number.isFinite(rounded) ? rounded.toString() : value.toExponential(3);
+        };
         for (let tick = 0; tick <= 4; tick++) {
           const value = low + (high - low) * tick / 4;
           const position = 220 - tick / 4 * 196;
+          const label = formatTick(value * scale);
           svg.append(
             svgElement("line", { x1: 72, x2: 496, y1: position, y2: position, class: "history-gridline" }),
-            svgElement("text", { x: 65, y: position + 4, "text-anchor": "end", fill: "currentColor", "font-size": 11 }, formatTick(value * scale))
+            svgElement("text", {
+              x: 65, y: position + 4, "text-anchor": "end", fill: "currentColor", "font-size": 11,
+              ...(label.length > 8 ? { textLength: 56, lengthAdjust: "spacingAndGlyphs" } : {}),
+            }, label)
           );
         }
         svg.appendChild(svgElement("text", { x: 8, y: 14, fill: "currentColor", "font-size": 12 }, "°C"));

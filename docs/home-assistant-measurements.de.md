@@ -47,8 +47,8 @@ Temperaturen. Verbindungs-, Authentifizierungs- und Zeitüberschreitungsfehler
 werden ohne gespeicherte Zugangsdaten angezeigt. Der Test speichert keine
 Einstellungen und verändert keine Provider-Bewertung.
 
-Klappe **Last 24 hours · HA recorder** in der durchgehenden Zeile unter den
-kompakten Metadaten und Aktionen einer Messung auf, um die gleitenden letzten
+Klappe die Sensorüberschrift mit **Last 24 hours · HA recorder** in der
+durchgehenden Zeile unter den kompakten Metadaten und Aktionen einer Messung auf, um die gleitenden letzten
 **24 Stunden** aus dem Home-Assistant-Recorder abzurufen. Der Abschnitt ist
 anfangs zugeklappt und lädt erst beim Öffnen; **Refresh history** fragt neuere
 Daten an.

@@ -24,6 +24,18 @@ Geräteklasse Temperatur, einem numerischen aktuellen Zustand und einer
 Celsius-Einheit (`°C` oder `C`). Bei der Entity-Suche dient der aktuelle Zustand zur Auswahl;
 die aufgezeichnete Historie liefert die täglichen Beobachtungen.
 
+## Verbindung zur Instanz testen
+
+Mit **Test connection** neben einer Instanz prüfst du die Erreichbarkeit vom
+ha_weather-Server aus und ob Home Assistant den gespeicherten Long-Lived Token
+akzeptiert. Speichere URL- oder Token-Änderungen zuerst; ungespeicherte
+Formularwerte werden nicht getestet. Auch schreibgeschützte, über die Umgebung
+verwaltete Instanzen können getestet werden. Die Zeile zeigt Erfolg, verweigerten
+Zugriff, Zeitüberschreitung, Netzwerkfehler oder eine unerwartete Antwort an, ohne
+Zugangsdaten offenzulegen. Einstellungen und Messungen bleiben unverändert.
+Eine erfolgreiche Verbindung garantiert keine nutzbaren Sensoren oder
+Recorder-Historie; verwende dafür die separaten Messungstests unten.
+
 ## Testen und letzte Werte ansehen
 
 Mit **Test** im Messungsformular vor dem Speichern oder neben einer vorhandenen

@@ -107,6 +107,7 @@
       details.fold > p { max-width: 78ch; }
       form.bar { margin-top: .8rem; }
       td .bar { flex-wrap: nowrap; }
+      #haInstances .bar { flex-wrap: wrap; }
       #haInstanceForm, #measurementForm { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; }
       #haInstanceForm > label, #measurementForm > label { display: grid; gap: .3rem; min-width: 0; }
       #haInstanceForm input, #haInstanceForm select, #measurementForm input, #measurementForm select { width: 100%; min-width: 0; }
@@ -378,6 +379,7 @@
 
       <h3>Home Assistant instances</h3>
       <p id="homeAssistantState" class="muted"></p>
+      <p class="muted">Test connection checks saved settings. Save URL or token changes before testing.</p>
       <table>
         <thead>
           <tr><th>Name</th><th>Id</th><th>Location</th><th>URL</th><th>Token</th><th>Origin</th><th>Measurements</th><th>Actions</th></tr>
@@ -1392,6 +1394,36 @@
         if (keep && items.some(([value]) => value === previous)) select.value = previous;
       }
 
+      async function testInstanceConnection(instance, status, trigger) {
+        trigger.disabled = true;
+        status.textContent = "Testing saved Home Assistant connection…";
+        try {
+          const result = await api(
+            `/api/observation-sources/home-assistant/instances/${encodeURIComponent(instance.id)}/test`,
+            { method: "POST" }
+          );
+          if (!status.isConnected) return;
+          const messages = {
+            success: "Connected; API token accepted. Sensors and Recorder were not checked.",
+            authentication_failed: "Home Assistant denied access. Check or replace the saved token.",
+            timeout: "The connection timed out. Check the saved URL and network.",
+            connection_failed: "Could not connect. Check the saved URL, network and TLS certificate.",
+            invalid_response: "Unexpected response. Check the Home Assistant base URL and reverse proxy.",
+          };
+          status.textContent = Object.hasOwn(messages, result.reason)
+            ? messages[result.reason] : "Connection test failed.";
+        } catch (error) {
+          if (!status.isConnected) return;
+          status.textContent = error.status === 401 || error.status === 403
+            ? "Check your ha_weather API key in Settings."
+            : error.status === 409
+              ? "Set a valid Home Assistant URL and token, save, then retry."
+              : "Could not test the connection. Refresh the instance list and retry.";
+        } finally {
+          if (status.isConnected) trigger.disabled = false;
+        }
+      }
+
       function renderInstances(ha) {
         const body = $("haInstances");
         body.textContent = "";
@@ -1408,9 +1440,19 @@
           cell(row, OBS_ORIGINS[instance.origin]);
           cell(row, instance.measurement_count);
           const actions = document.createElement("td");
+          actions.className = "ha-diagnostics";
+          const box = document.createElement("div");
+          box.className = "bar";
+          const connectionStatus = document.createElement("p");
+          connectionStatus.className = "muted";
+          connectionStatus.setAttribute("role", "status");
+          connectionStatus.setAttribute("aria-live", "polite");
+          const testButton = button("Test connection",
+            () => testInstanceConnection(instance, connectionStatus, testButton));
+          testButton.setAttribute("aria-label", `Test connection to ${instance.name}`);
+          testButton.title = "Tests saved settings. Save changes before testing.";
+          box.appendChild(testButton);
           if (instance.origin === "ui") {
-            const box = document.createElement("div");
-            box.className = "bar";
             box.append(
               button("Edit", () => startInstanceEdit(instance)),
               button("Delete", async () => {
@@ -1428,10 +1470,12 @@
                 } catch (error) { setStatus(error.message); }
               })
             );
-            actions.appendChild(box);
           } else {
-            actions.textContent = "read only";
+            const readOnly = document.createElement("span");
+            readOnly.textContent = "read only";
+            box.appendChild(readOnly);
           }
+          actions.append(box, connectionStatus);
           row.appendChild(actions);
           body.appendChild(row);
         });

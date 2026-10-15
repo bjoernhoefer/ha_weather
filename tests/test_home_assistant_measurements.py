@@ -48,6 +48,8 @@ def probe(settings, storage, monkeypatch):
         requests.append(request)
         if "error" in upstream:
             raise upstream["error"]("private upstream details", request=request)
+        if "content" in upstream:
+            return httpx.Response(upstream["status"], content=upstream["content"])
         return httpx.Response(
             upstream["status"],
             json=upstream["data"],
@@ -65,6 +67,97 @@ def probe(settings, storage, monkeypatch):
     storage.save_location(VIENNA.model_copy(update={"id": "other", "name": "Other"}))
     with TestClient(create_app(settings, service)) as api:
         yield api, service, upstream, requests
+
+
+def test_instance_connection_uses_saved_credentials_without_side_effects(probe):
+    api, service, upstream, requests = probe
+    upstream["data"] = {"message": "API running.", "extra": True}
+    instances = service.storage.ha_instances()
+    response = api.post(f"{ROOT}/instances/home/test")
+    assert response.status_code == 200
+    assert response.json() == {"instance_id": "home", "reason": "success"}
+    assert response.headers["cache-control"] == "no-store"
+    assert len(requests) == 1
+    assert requests[0].method == "GET"
+    assert str(requests[0].url) == "http://ha.invalid:8123/api/"
+    assert requests[0].headers["Authorization"].split() == [
+        home_assistant.AUTH_SCHEME, "test-only-token",
+    ]
+    assert service.storage.ha_instances() == instances
+    assert service.storage.measurements() == []
+    assert service.storage.observations("vienna", NOW.date()) == {}
+
+
+@pytest.mark.parametrize("status,reason", [
+    (401, "authentication_failed"), (403, "authentication_failed"),
+    (301, "invalid_response"), (302, "invalid_response"),
+    (404, "invalid_response"), (500, "invalid_response"),
+])
+def test_instance_connection_rejects_upstream_errors_and_redirects(probe, status, reason):
+    api, _, upstream, requests = probe
+    upstream.update(status=status, data={"message": "private upstream details"})
+    response = api.post(f"{ROOT}/instances/home/test")
+    assert response.json() == {"instance_id": "home", "reason": reason}
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("payload", [None, [], "API running.", {}, {"message": "wrong"}])
+def test_instance_connection_rejects_unexpected_payloads(probe, payload):
+    api, _, upstream, _ = probe
+    upstream["data"] = payload
+    assert api.post(f"{ROOT}/instances/home/test").json()["reason"] == "invalid_response"
+
+
+@pytest.mark.parametrize("error,reason", [
+    (httpx.ReadTimeout, "timeout"), (httpx.ConnectError, "connection_failed"),
+])
+def test_instance_connection_sanitizes_network_failures(probe, error, reason):
+    api, _, upstream, _ = probe
+    upstream["error"] = error
+    assert api.post(f"{ROOT}/instances/home/test").json() == {
+        "instance_id": "home", "reason": reason,
+    }
+
+
+@pytest.mark.parametrize("content", ["<html>Login required</html>", "{invalid json"])
+def test_instance_connection_rejects_non_json_success(probe, content):
+    api, _, upstream, _ = probe
+    upstream["content"] = content
+    assert api.post(f"{ROOT}/instances/home/test").json()["reason"] == "invalid_response"
+
+
+@pytest.mark.parametrize("url,token,expected", [
+    ("http://ha.invalid/proxy/", "environment-test-token", 200),
+    ("http://ha.invalid", None, 409),
+    ("http://ha.invalid/?secret=private", "environment-test-token", 409),
+    ("ftp://ha.invalid", "environment-test-token", 409),
+])
+def test_instance_connection_supports_unpaired_environment_and_validates_url(
+    probe, url, token, expected,
+):
+    api, service, upstream, requests = probe
+    upstream["data"] = {"message": "API running."}
+    service.settings = service.settings.model_copy(update={
+        "home_assistant_url": url, "home_assistant_token": token,
+    })
+    response = api.post(f"{ROOT}/instances/environment/test")
+    assert response.status_code == expected
+    if expected == 200:
+        assert response.json() == {"instance_id": "environment", "reason": "success"}
+        assert requests[0].url.path == "/proxy/api/"
+        assert requests[0].headers["Authorization"].split() == [
+            home_assistant.AUTH_SCHEME, "environment-test-token",
+        ]
+    else:
+        assert requests == []
+    assert "environment-test-token" not in response.text
+    assert "password" not in response.text
+
+
+def test_instance_connection_unknown_instance_does_not_make_requests(probe):
+    api, _, _, requests = probe
+    assert api.post(f"{ROOT}/instances/missing/test").status_code == 404
+    assert requests == []
 
 
 def test_live_test_reads_valid_celsius_and_never_persists(probe):
@@ -529,7 +622,7 @@ def test_pairing_and_derived_measurement_survive_restart(tmp_path):
     store.close()
 
 
-@pytest.mark.parametrize("action", ["test", "history"])
+@pytest.mark.parametrize("action", ["test", "history", "instance"])
 def test_probe_endpoints_require_existing_api_auth(tmp_path, action):
     settings = Settings(
         database_path=str(tmp_path / "auth.sqlite3"), locations=[VIENNA],
@@ -537,11 +630,12 @@ def test_probe_endpoints_require_existing_api_auth(tmp_path, action):
     )
     store = Storage(settings.database_path)
     service = WeatherService(settings, store)
+    path = f"{ROOT}/instances/missing/test" if action == "instance" else f"{ROOT}/measurements/{action}"
     with TestClient(create_app(settings, service)) as api:
-        response = api.post(f"{ROOT}/measurements/{action}", json=BODY)
+        response = api.post(path, json=BODY)
         assert response.status_code == 401
         response = api.post(
-            f"{ROOT}/measurements/{action}", json=BODY,
+            path, json=BODY,
             headers={"X-API-Key": "test-api-key"},
         )
         assert response.status_code == 404

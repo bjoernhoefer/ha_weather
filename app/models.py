@@ -332,6 +332,16 @@ class HomeAssistantInstanceInfo(BaseModel):
     location_id: Optional[str] = None
 
 
+class HomeAssistantInstanceTest(BaseModel):
+    """Connection diagnostic without credentials or upstream error details."""
+
+    instance_id: str
+    reason: Literal[
+        "success", "authentication_failed", "timeout", "connection_failed",
+        "invalid_response",
+    ]
+
+
 class HomeAssistantEntityInfo(BaseModel):
     """A Home Assistant entity discovered for optional measurement setup."""
 

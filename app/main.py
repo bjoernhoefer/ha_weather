@@ -28,6 +28,7 @@ from .models import (
     LocationInfo,
     MeasurementIn,
     ObservationSourcesInfo,
+    SourceComparisonHistory,
     ProviderExplanation,
     ProviderOverride,
     ProviderRanking,
@@ -517,6 +518,18 @@ def create_app(
         location_id: str, service: WeatherService = Depends(get_service)
     ) -> LocationForecast:
         return await _guard(service.refresh(location_id))
+
+    @app.get(
+        "/api/source-comparison/{location_id}",
+        response_model=SourceComparisonHistory,
+        dependencies=protected,
+    )
+    async def source_comparison(
+        location_id: str,
+        hours: int = Query(default=24, ge=24, le=72, multiple_of=24),
+        service: WeatherService = Depends(get_service),
+    ) -> SourceComparisonHistory:
+        return await _guard(service.source_comparison(location_id, hours=hours))
 
     @app.get(
         "/api/history/{location_id}",

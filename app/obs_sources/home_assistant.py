@@ -10,6 +10,7 @@ Assistant instance and a location, and are tagged with the matching
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from datetime import date, datetime, timedelta, timezone
@@ -27,7 +28,7 @@ from ..config import (
     Measurement,
     Settings,
 )
-from ..models import HomeAssistantEntityInfo, Observation
+from ..models import HomeAssistantEntityInfo, HourlyMeasurement, Observation
 from .base import ObservationSource, register
 
 LOGGER = logging.getLogger(__name__)
@@ -45,9 +46,10 @@ def _resolve_timezone(timezone_name: str) -> ZoneInfo:
 
 def _as_float(value: object) -> Optional[float]:
     try:
-        return float(value)  # type: ignore[arg-type]
+        result = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
+    return result if math.isfinite(result) else None
 
 
 def observations_from_history(
@@ -317,6 +319,59 @@ def hourly_means(
     }
 
 
+def hourly_temperature_means(
+    history: List[List[dict]], start: datetime, end: datetime
+) -> Dict[datetime, float]:
+    """Aggregate one sensor's finite Celsius values and reset on invalid states."""
+    start = start.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    buckets: Dict[datetime, List[float]] = {}
+    for series in history:
+        events: List[tuple[datetime, Optional[float]]] = []
+        for entry in series:
+            stamp = entry.get("last_changed") or entry.get("last_updated")
+            if not stamp:
+                continue
+            try:
+                when = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            attributes = entry.get("attributes")
+            if (
+                isinstance(attributes, dict)
+                and attributes.get("device_class") == "temperature"
+                and attributes.get("unit_of_measurement") in {"°C", "C"}
+            ):
+                value = _as_float(entry.get("state"))
+            else:
+                value = None
+            events.append((when, value))
+        events.sort(key=lambda item: item[0])
+        last_value: Optional[float] = None
+        index = 0
+        slot = start
+        while slot < end:
+            slot_end = slot + timedelta(hours=1)
+            values: List[float] = []
+            while index < len(events) and events[index][0] < slot:
+                last_value = events[index][1]
+                index += 1
+            if last_value is not None:
+                values.append(last_value)
+            while index < len(events) and events[index][0] < slot_end:
+                last_value = events[index][1]
+                if last_value is not None:
+                    values.append(last_value)
+                index += 1
+            if values:
+                buckets.setdefault(slot, []).extend(values)
+            slot = slot_end
+    return {
+        slot: round(sum(values) / len(values), 2) for slot, values in buckets.items()
+    }
+
+
 @register
 class HomeAssistantObservationSource(ObservationSource):
     """Indoor and outdoor temperature sensors read from Home Assistant."""
@@ -354,6 +409,7 @@ class HomeAssistantObservationSource(ObservationSource):
         entity_ids: List[str],
         start: datetime,
         end: datetime,
+        minimal_response: bool = True,
     ) -> List[List[dict]]:
         base_url = (instance.url or "").rstrip("/")
         # the timestamp is part of the URL path, so it must be percent-encoded
@@ -365,7 +421,7 @@ class HomeAssistantObservationSource(ObservationSource):
             params={
                 "end_time": end.isoformat(),
                 "filter_entity_id": ",".join(entity_ids),
-                "minimal_response": "true",
+                "minimal_response": str(minimal_response).lower(),
             },
             headers={"Authorization": auth_header},
         )
@@ -457,3 +513,52 @@ class HomeAssistantObservationSource(ObservationSource):
                     exc,
                 )
         return hourly_means(history, start, end) if history else {}
+
+    async def fetch_hourly_by_measurement(
+        self,
+        client: httpx.AsyncClient,
+        location: Location,
+        start: datetime,
+        end: datetime,
+    ) -> List[HourlyMeasurement]:
+        """Fetch each outdoor Celsius sensor separately to preserve its identity."""
+        instances = effective_instances(self.settings)
+        measurements = self.measurements_for(location, "outdoor")
+
+        async def fetch_one(measurement: Measurement) -> List[HourlyMeasurement]:
+            instance = instances[measurement.instance_id]
+            try:
+                history = await self._history(
+                    client,
+                    instance,
+                    [measurement.entity_id],
+                    start,
+                    end,
+                    minimal_response=False,
+                )
+                means = hourly_temperature_means(history, start, end)
+            except Exception as exc:  # noqa: BLE001 - one sensor must not break others
+                self.report_failure(exc)
+                LOGGER.warning(
+                    "Home Assistant sensor %s failed for %s",
+                    measurement.entity_id,
+                    location.id,
+                )
+                return []
+
+            name = measurement.name.strip() or measurement.entity_id
+            return [
+                HourlyMeasurement(
+                    location_id=location.id,
+                    target_time=target_time,
+                    source_id=f"{measurement.instance_id}:{measurement.entity_id}",
+                    instance_id=measurement.instance_id,
+                    entity_id=measurement.entity_id,
+                    source_name=f"{instance.name} / {name}",
+                    temperature=temperature,
+                )
+                for target_time, temperature in means.items()
+            ]
+
+        results = await asyncio.gather(*(fetch_one(item) for item in measurements))
+        return [reading for result in results for reading in result]

@@ -36,10 +36,20 @@ def test_auth_required_only_in_public_mode():
 
 
 async def test_refresh_stores_forecasts_and_observations(service, storage):
+    from datetime import timedelta
+
+    from app.clock import now_utc
+
     forecast = await service.refresh("vienna")
     assert forecast.days
     assert {item.provider for item in forecast.providers} >= {"open_meteo", "met_no"}
     assert storage.observations("vienna")
+    hourly = storage.provider_hourly_forecasts(
+        "vienna",
+        now_utc() - timedelta(hours=1),
+        now_utc() + timedelta(days=2),
+    )
+    assert {row["provider"] for row in hourly} >= {"open_meteo"}
 
 
 async def test_forecast_is_cached_until_refreshed(service):

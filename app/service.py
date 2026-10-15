@@ -39,12 +39,14 @@ from .models import (
     ElasticsearchMeasurementIn,
     ElasticsearchMeasurementInfo,
     ElasticsearchSettingsInfo,
+    ComparisonSource,
     ForecastHistory,
     HistoryHour,
     HomeAssistantEntityInfo,
     HomeAssistantInstanceIn,
     HomeAssistantInstanceInfo,
     HomeAssistantSettingsInfo,
+    HourlySourceComparison,
     LocationForecast,
     LocationIn,
     LocationInfo,
@@ -57,6 +59,8 @@ from .models import (
     ProviderRanking,
     ProviderScore,
     SeasonInfo,
+    SourceComparisonHistory,
+    SourceComparisonHour,
     SourceInfo,
     VerificationResult,
 )
@@ -961,6 +965,7 @@ class WeatherService:
         forecasts: List[ProviderForecast] = list(results)
         for forecast in forecasts:
             self.storage.save_forecast(forecast)
+        self.storage.save_provider_hourly_forecasts(forecasts)
         self.storage.save_observations(observations)
 
         forecast = self._build(location, forecasts, agro)
@@ -1046,6 +1051,129 @@ class WeatherService:
             self._observation_failure("home_assistant", exc)
             LOGGER.warning("Home Assistant history failed for %s: %s", location.id, exc)
             return {}
+
+    async def source_comparison(
+        self, location_id: str, hours: int = 24
+    ) -> SourceComparisonHistory:
+        """Compare individual provider temperatures with each outdoor HA sensor."""
+        if hours not in {24, 48, 72}:
+            raise ValueError("hours must be 24, 48, or 72")
+
+        location = self.location(location_id)
+        end = now_utc().replace(minute=0, second=0, microsecond=0)
+        start = end - timedelta(hours=hours)
+        settings = self.observation_settings()
+        measurement_configs = [
+            item
+            for item in effective_measurements(settings)
+            if item.location_id == location_id and item.scope == "outdoor"
+        ]
+        instances = effective_instances(settings)
+        source_names = {
+            f"{measurement.instance_id}:{measurement.entity_id}": (
+                f"{instances[measurement.instance_id].name} / "
+                f"{measurement.name.strip() or measurement.entity_id}"
+            )
+            for measurement in measurement_configs
+            if measurement.instance_id in instances
+        }
+
+        if "home_assistant" in settings.observation_sources:
+            source = HomeAssistantObservationSource(settings)
+            source.failure_reporter = self._observation_failure
+            if source.is_available() and source.supports(location):
+                try:
+                    async with self._client_factory() as client:
+                        readings = await source.fetch_hourly_by_measurement(
+                            client, location, start, end
+                        )
+                    self.storage.save_hourly_measurements(readings)
+                except Exception as exc:  # noqa: BLE001 - archived data remains usable
+                    self._observation_failure("home_assistant", exc)
+                    LOGGER.warning(
+                        "Home Assistant comparison history failed for %s",
+                        location_id,
+                    )
+
+        forecasts = self.storage.provider_hourly_forecasts(location_id, start, end)
+        measurements = self.storage.hourly_measurements(location_id, start, end)
+        providers = sorted({row["provider"] for row in forecasts})
+        for reading in measurements:
+            source_names.setdefault(reading.source_id, reading.source_name)
+        sources = [
+            ComparisonSource(id=source_id, name=name)
+            for source_id, name in sorted(source_names.items(), key=lambda item: item[1])
+        ]
+
+        forecast_values = {
+            (row["provider"], datetime.fromisoformat(row["target_time"])): row[
+                "temperature"
+            ]
+            for row in forecasts
+        }
+        measured_values = {
+            (reading.source_id, reading.target_time): reading.temperature
+            for reading in measurements
+        }
+        comparison_hours = []
+        target_time = start
+        while target_time < end:
+            comparisons = []
+            for provider in providers:
+                for source_info in sources:
+                    forecast_temperature = forecast_values.get(
+                        (provider, target_time)
+                    )
+                    measured_temperature = measured_values.get(
+                        (source_info.id, target_time)
+                    )
+                    raw_error = (
+                        forecast_temperature - measured_temperature
+                        if forecast_temperature is not None
+                        and measured_temperature is not None
+                        else None
+                    )
+                    error = round(raw_error, 2) if raw_error is not None else None
+                    absolute_error = (
+                        round(abs(raw_error), 2) if raw_error is not None else None
+                    )
+                    assessment = (
+                        "good"
+                        if raw_error is not None and abs(raw_error) <= 1
+                        else "check"
+                        if raw_error is not None and abs(raw_error) <= 2
+                        else "large" if raw_error is not None
+                        else None
+                    )
+                    comparisons.append(
+                        HourlySourceComparison(
+                            provider=provider,
+                            source_id=source_info.id,
+                            source_name=source_info.name,
+                            forecast_temperature=forecast_temperature,
+                            measured_temperature=measured_temperature,
+                            temperature_error=error,
+                            absolute_temperature_error=absolute_error,
+                            assessment=assessment,
+                        )
+                    )
+            comparison_hours.append(
+                SourceComparisonHour(
+                    target_time=target_time, comparisons=comparisons
+                )
+            )
+            target_time += timedelta(hours=1)
+
+        return SourceComparisonHistory(
+            location_id=location_id,
+            timezone=location.timezone,
+            generated_at=now_utc(),
+            start=start,
+            end=end,
+            providers=providers,
+            sources=sources,
+            hours=comparison_hours,
+        )
 
     async def history(self, location_id: str) -> ForecastHistory:
         try:

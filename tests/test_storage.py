@@ -4,7 +4,16 @@ import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
 from app.clock import now_utc, today_utc
-from app.models import AggregatedHour, CustomSource, DailyForecast, Observation, ProviderForecast, ProviderOverride
+from app.models import (
+    AggregatedHour,
+    CustomSource,
+    DailyForecast,
+    HourlyForecast,
+    HourlyMeasurement,
+    Observation,
+    ProviderForecast,
+    ProviderOverride,
+)
 from app.observations import observations_from_payload
 from app.storage import Storage
 
@@ -268,6 +277,115 @@ def test_hourly_predictions_keep_the_first_forecast_of_an_hour(storage):
     issued_at, hour = stored[target]
     assert issued_at == first
     assert hour.temperature == 10.0
+
+
+def test_provider_hourly_forecasts_keep_first_value_per_provider_and_utc_hour(storage):
+    target = now_utc().replace(minute=0, second=0, microsecond=0) + timedelta(hours=5)
+    first_issued = target - timedelta(hours=20)
+    later_issued = target - timedelta(hours=1)
+    storage.save_provider_hourly_forecasts(
+        [
+            ProviderForecast(
+                provider="open_meteo",
+                location_id="vienna",
+                issued_at=first_issued,
+                hours=[HourlyForecast(target_time=target, temperature=10.0)],
+            )
+        ]
+    )
+    storage.save_provider_hourly_forecasts(
+        [
+            ProviderForecast(
+                provider="open_meteo",
+                location_id="vienna",
+                issued_at=later_issued,
+                hours=[HourlyForecast(target_time=target, temperature=12.0)],
+            ),
+            ProviderForecast(
+                provider="met_no",
+                location_id="vienna",
+                issued_at=later_issued,
+                hours=[HourlyForecast(target_time=target, temperature=14.0)],
+            ),
+        ]
+    )
+    stored = storage.provider_hourly_forecasts(
+        "vienna",
+        target.astimezone(timezone(timedelta(hours=5))) - timedelta(hours=1),
+        target.astimezone(timezone(timedelta(hours=5))) + timedelta(hours=1),
+    )
+    assert [(row["provider"], row["temperature"]) for row in stored] == [
+        ("met_no", 14.0),
+        ("open_meteo", 10.0),
+    ]
+    assert stored[1]["issued_at"] == first_issued.isoformat()
+
+
+def test_hourly_comparison_archives_expire_after_three_days(storage):
+    target = now_utc().replace(minute=0, second=0, microsecond=0) - timedelta(days=4)
+    storage.save_provider_hourly_forecasts(
+        [
+            ProviderForecast(
+                provider="open_meteo",
+                location_id="vienna",
+                issued_at=target - timedelta(hours=1),
+                hours=[HourlyForecast(target_time=target, temperature=10.0)],
+            )
+        ]
+    )
+    storage.save_hourly_measurements(
+        [
+            HourlyMeasurement(
+                location_id="vienna",
+                target_time=target,
+                source_id="home:sensor.garden",
+                instance_id="home",
+                entity_id="sensor.garden",
+                source_name="Home / Garden",
+                temperature=9.0,
+            )
+        ]
+    )
+
+    assert storage.provider_hourly_forecasts(
+        "vienna", target - timedelta(hours=1), target + timedelta(hours=1)
+    ) == []
+    assert storage.hourly_measurements(
+        "vienna", target - timedelta(hours=1), target + timedelta(hours=1)
+    ) == []
+
+
+def test_hourly_measurements_keep_each_sensor_identity(storage):
+    target = now_utc().replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    storage.save_hourly_measurements(
+        [
+            HourlyMeasurement(
+                location_id="vienna",
+                target_time=target,
+                source_id="home:sensor.garden",
+                instance_id="home",
+                entity_id="sensor.garden",
+                source_name="Home / Garden",
+                temperature=17.5,
+            ),
+            HourlyMeasurement(
+                location_id="vienna",
+                target_time=target,
+                source_id="cabin:sensor.porch",
+                instance_id="cabin",
+                entity_id="sensor.porch",
+                source_name="Cabin / Porch",
+                temperature=15.0,
+            ),
+        ]
+    )
+    stored = storage.hourly_measurements(
+        "vienna", target - timedelta(hours=1), target + timedelta(hours=1)
+    )
+    assert [(row.source_id, row.temperature) for row in stored] == [
+        ("cabin:sensor.porch", 15.0),
+        ("home:sensor.garden", 17.5),
+    ]
 
 
 def test_ui_locations_and_measurements_round_trip(storage):

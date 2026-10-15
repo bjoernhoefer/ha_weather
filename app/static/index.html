@@ -105,6 +105,17 @@
       form.bar { margin-top: .8rem; }
       td .bar { flex-wrap: nowrap; }
       #providerExplanation { margin-top: 1rem; }
+      .comparison-controls { margin: 1rem 0; }
+      .comparison-controls label { display: grid; gap: .3rem; }
+      .comparison-table-wrap { max-width: 100%; overflow-x: auto; }
+      table.comparison-matrix, table.comparison-detail { display: table; width: max-content; min-width: 100%; overflow: visible; }
+      .comparison-matrix td { min-width: 11rem; white-space: normal; }
+      .comparison-matrix th[scope="row"] { text-transform: none; letter-spacing: normal; }
+      .comparison-detail td { white-space: nowrap; }
+      .comparison-assessment { font-weight: 700; }
+      .assessment-good { color: #167348; }
+      .assessment-check { color: #8a6200; }
+      .assessment-large { color: #b44d32; }
       #loggingSection > summary:focus-visible { outline: 3px solid #78b99a88; outline-offset: 4px; }
       .log-controls { margin-top: 1rem; }
       .log-controls label { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; min-width: 0; max-width: 100%; }
@@ -161,6 +172,7 @@
     <nav class="dashboard-nav" aria-label="Dashboard sections">
       <a href="#forecastSection">Forecast</a>
       <a href="#historySection">History</a>
+      <a href="#sourceComparisonSection">Source comparison</a>
       <a href="#gardenSection">Season &amp; garden</a>
       <a href="#providersSection">Providers</a>
       <a href="#sourcesSection">Sources</a>
@@ -213,6 +225,54 @@
         </thead>
         <tbody id="history"></tbody>
       </table>
+    </details>
+
+    <details class="fold" id="sourceComparisonSection">
+      <summary><h2>Hourly source comparison</h2></summary>
+      <p class="muted">
+        Compare each weather provider with each outdoor Home Assistant
+        temperature sensor. Errors are forecast minus measured temperature;
+        source-specific history begins after this feature is deployed.
+      </p>
+      <p class="muted">
+        Assessment by absolute error: Good &le; 1 &deg;C, Check &gt; 1 through
+        2 &deg;C, Large &gt; 2 &deg;C. Temperature is compared separately from
+        precipitation.
+      </p>
+      <div class="bar comparison-controls">
+        <label>Period
+          <select id="comparisonPeriod" aria-label="Comparison period">
+            <option value="24">Last 24 hours</option>
+            <option value="48">Last 48 hours</option>
+            <option value="72">Last 72 hours</option>
+          </select>
+        </label>
+        <label>Matrix hour
+          <select id="comparisonHour" aria-label="Hour shown in comparison matrix"></select>
+        </label>
+      </div>
+      <p id="comparisonStatus" class="muted" role="status" aria-live="polite"></p>
+      <h3>Selected-hour matrix</h3>
+      <div class="comparison-table-wrap" role="region" tabindex="0" aria-label="Hourly provider and sensor comparison matrix">
+        <table class="comparison-matrix">
+          <thead id="comparisonMatrixHead"></thead>
+          <tbody id="comparisonMatrix"></tbody>
+        </table>
+      </div>
+      <h3>Hourly details</h3>
+      <div class="comparison-table-wrap" role="region" tabindex="0" aria-label="Detailed hourly source comparisons">
+        <table class="comparison-detail">
+          <thead>
+            <tr>
+              <th scope="col">Hour</th><th scope="col">Internet source</th>
+              <th scope="col">Home Assistant sensor</th><th scope="col">Forecast &deg;C</th>
+              <th scope="col">Measured &deg;C</th><th scope="col">Deviation &deg;C</th>
+              <th scope="col">Absolute error &deg;C</th><th scope="col">Assessment</th>
+            </tr>
+          </thead>
+          <tbody id="comparisonDetails"></tbody>
+        </table>
+      </div>
     </details>
 
     <details class="fold" id="gardenSection">
@@ -1600,6 +1660,190 @@
           : "No archived prediction for the last 24 hours yet – predictions are archived on every forecast refresh.";
       }
 
+      let sourceComparisonData = null;
+      let sourceComparisonRequest = 0;
+
+      function comparisonTime(value, timezone) {
+        return new Intl.DateTimeFormat(undefined, {
+          timeZone: timezone,
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZoneName: "short",
+        }).format(new Date(value));
+      }
+
+      function assessment(value) {
+        const labels = { good: "Good", check: "Check", large: "Large" };
+        const span = document.createElement("span");
+        span.className = `comparison-assessment assessment-${value}`;
+        span.textContent = labels[value] || "–";
+        return span;
+      }
+
+      function renderComparisonMatrix(data) {
+        const header = $("comparisonMatrixHead");
+        const body = $("comparisonMatrix");
+        header.textContent = "";
+        body.textContent = "";
+        const selected = data.hours.find(
+          (hour) => hour.target_time === $("comparisonHour").value
+        );
+        const headerRow = document.createElement("tr");
+        const timeHeading = document.createElement("th");
+        timeHeading.scope = "col";
+        timeHeading.textContent = selected
+          ? `Home Assistant sensor · ${comparisonTime(selected.target_time, data.timezone)}`
+          : "Home Assistant sensor";
+        headerRow.appendChild(timeHeading);
+        data.providers.forEach((provider) => {
+          const heading = document.createElement("th");
+          heading.scope = "col";
+          heading.textContent = provider;
+          headerRow.appendChild(heading);
+        });
+        header.appendChild(headerRow);
+
+        if (!selected || !data.sources.length || !data.providers.length) {
+          const row = document.createElement("tr");
+          const empty = document.createElement("td");
+          empty.colSpan = Math.max(data.providers.length + 1, 1);
+          empty.textContent = "No provider and sensor pairs are available for this hour.";
+          row.appendChild(empty);
+          body.appendChild(row);
+          return;
+        }
+
+        data.sources.forEach((source) => {
+          const row = document.createElement("tr");
+          const sourceHeading = document.createElement("th");
+          sourceHeading.scope = "row";
+          sourceHeading.textContent = source.name;
+          row.appendChild(sourceHeading);
+          data.providers.forEach((provider) => {
+            const comparison = selected.comparisons.find(
+              (item) => item.provider === provider && item.source_id === source.id
+            );
+            const td = document.createElement("td");
+            if (
+              comparison?.forecast_temperature === null ||
+              comparison?.forecast_temperature === undefined ||
+              comparison?.measured_temperature === null ||
+              comparison?.measured_temperature === undefined
+            ) {
+              td.textContent = "Forecast or measurement unavailable";
+            } else {
+              const signed = comparison.temperature_error > 0 ? "+" : "";
+              td.textContent =
+                `Forecast ${fmt(comparison.forecast_temperature)} °C · measured ${fmt(comparison.measured_temperature)} °C · ` +
+                `${signed}${fmt(comparison.temperature_error)} °C · ${assessment(comparison.assessment).textContent}`;
+              td.classList.add(`assessment-${comparison.assessment}`);
+            }
+            row.appendChild(td);
+          });
+          body.appendChild(row);
+        });
+      }
+
+      function renderComparisonDetails(data) {
+        const body = $("comparisonDetails");
+        body.textContent = "";
+        let populated = 0;
+        data.hours.forEach((hour) => {
+          hour.comparisons.forEach((comparison) => {
+            const row = document.createElement("tr");
+            cell(row, comparisonTime(hour.target_time, data.timezone));
+            cell(row, comparison.provider);
+            cell(row, comparison.source_name);
+            cell(row, comparison.forecast_temperature === null
+              ? null : `${fmt(comparison.forecast_temperature)} °C`);
+            cell(row, comparison.measured_temperature === null
+              ? null : `${fmt(comparison.measured_temperature)} °C`);
+            const error = cell(row, comparison.temperature_error === null
+              ? null
+              : `${comparison.temperature_error > 0 ? "+" : ""}${fmt(comparison.temperature_error)} °C`);
+            const absolute = cell(row, comparison.absolute_temperature_error === null
+              ? null : `${fmt(comparison.absolute_temperature_error)} °C`);
+            if (comparison.assessment) {
+              error.className = `assessment-${comparison.assessment}`;
+              absolute.className = `assessment-${comparison.assessment}`;
+              cell(row, assessment(comparison.assessment));
+              populated++;
+            } else {
+              cell(row, "Unavailable");
+            }
+            body.appendChild(row);
+          });
+        });
+        if (!data.providers.length || !data.sources.length) {
+          const row = document.createElement("tr");
+          const empty = cell(
+            row,
+            !data.providers.length
+              ? "No provider-specific hourly forecasts have been archived yet. Refresh the forecast first."
+              : "No outdoor Home Assistant temperature sensors are configured for this location."
+          );
+          empty.colSpan = 8;
+          body.appendChild(row);
+        }
+        return populated;
+      }
+
+      function renderSourceComparison(data) {
+        const hourSelect = $("comparisonHour");
+        const previous = hourSelect.value;
+        hourSelect.textContent = "";
+        data.hours.forEach((hour) => {
+          const option = document.createElement("option");
+          option.value = hour.target_time;
+          option.textContent = comparisonTime(hour.target_time, data.timezone);
+          hourSelect.appendChild(option);
+        });
+        if (data.hours.some((hour) => hour.target_time === previous)) {
+          hourSelect.value = previous;
+        } else if (data.hours.length) {
+          hourSelect.value = data.hours[data.hours.length - 1].target_time;
+        }
+        renderComparisonMatrix(data);
+        const populated = renderComparisonDetails(data);
+        $("comparisonStatus").textContent = !data.providers.length
+          ? "No provider-specific hourly forecasts are archived yet. Refresh the forecast to start collecting them."
+          : !data.sources.length
+            ? "No outdoor Home Assistant temperature sensors are configured for this location."
+            : populated
+              ? `${populated} hourly provider/sensor comparisons have both values. Missing values are not scored.`
+              : "No provider/sensor pairs have both values in this period.";
+      }
+
+      async function loadSourceComparison() {
+        const locationId = $("location").value;
+        if (!locationId) return;
+        const request = ++sourceComparisonRequest;
+        $("comparisonStatus").textContent = "Loading source comparison…";
+        $("comparisonMatrix").textContent = "";
+        $("comparisonDetails").textContent = "";
+        try {
+          const data = await api(
+            `/api/source-comparison/${encodeURIComponent(locationId)}?hours=${$("comparisonPeriod").value}`
+          );
+          if (request !== sourceComparisonRequest || $("location").value !== locationId) return;
+          sourceComparisonData = data;
+          renderSourceComparison(data);
+        } catch (error) {
+          if (request === sourceComparisonRequest) {
+            sourceComparisonData = null;
+            $("comparisonStatus").textContent = error.message;
+          }
+        }
+      }
+
+      $("comparisonPeriod").addEventListener("change", loadSourceComparison);
+      $("comparisonHour").addEventListener("change", () => {
+        if (sourceComparisonData) renderComparisonMatrix(sourceComparisonData);
+      });
+
       async function loadHistory() {
         const locationId = $("location").value;
         if (!locationId) return;
@@ -1615,6 +1859,10 @@
         if ($("historySection").open) loadHistory();
       });
 
+      $("sourceComparisonSection").addEventListener("toggle", () => {
+        if ($("sourceComparisonSection").open) loadSourceComparison();
+      });
+
       ["forecastSection", "next24Section"].forEach((id) => {
         $(id).addEventListener("toggle", () => {
           if ($(id).open) centerCurrentHour();
@@ -1627,6 +1875,7 @@
         if (!editingMeasurement) $("measurementLocation").value = $("location").value;
         if (!editingEsMeasurement) $("esMeasurementLocation").value = $("location").value;
         await load(false);
+        if ($("sourceComparisonSection").open) loadSourceComparison();
       }
 
       $("addSource").addEventListener("submit", async (event) => {
@@ -1660,6 +1909,7 @@
           renderShortForecast(forecast.four_hourly, "fourHourlyForecast");
           setStatus(`Updated ${new Date(forecast.generated_at).toLocaleString()}`);
           if ($("historySection").open) loadHistory();
+          if ($("sourceComparisonSection").open) loadSourceComparison();
         } catch (error) { setStatus(error.message); }
       }
 

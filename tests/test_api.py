@@ -10,6 +10,8 @@ from app.models import (
     MAX_ENTITY_LENGTH,
     MAX_SETTING_LENGTH,
     DailyForecast,
+    HourlyForecast,
+    HourlyMeasurement,
     Observation,
     ProviderForecast,
 )
@@ -47,6 +49,11 @@ def test_measurement_ui_keeps_manual_entry_and_has_accessible_entity_search(api)
     assert 'id="haEntityResults"' in page
     assert 'id="haEntitySearchStatus" class="muted" role="status" aria-live="polite"' in page
     assert 'id="measurementEntity" required' in page
+    assert 'id="sourceComparisonSection"' in page
+    assert 'id="comparisonPeriod"' in page
+    assert 'id="comparisonHour"' in page
+    assert 'id="comparisonMatrix"' in page
+    assert 'id="comparisonDetails"' in page
     assert ".dashboard-controls { display: grid;" in page
     assert "@media (max-width: 640px)" in page
 
@@ -1124,6 +1131,155 @@ def test_history_compares_the_archived_prediction_with_measurements(api, service
     assert payload["temperature_bias"] == 2.5
     assert payload["sources"] == ["open_meteo"]
     assert api.get("/api/history/mars").status_code == 404
+
+
+def test_source_comparison_returns_each_provider_sensor_pair(api, service):
+    from app.clock import now_utc
+
+    end = now_utc().replace(minute=0, second=0, microsecond=0)
+    target = end - timedelta(hours=1)
+    issued = target - timedelta(hours=12)
+    service.storage.save_provider_hourly_forecasts(
+        [
+            ProviderForecast(
+                provider="open_meteo",
+                location_id="vienna",
+                issued_at=issued,
+                hours=[HourlyForecast(target_time=target, temperature=17.5)],
+            ),
+            ProviderForecast(
+                provider="met_no",
+                location_id="vienna",
+                issued_at=issued,
+                hours=[HourlyForecast(target_time=target, temperature=18.5)],
+            ),
+        ]
+    )
+    service.storage.save_hourly_measurements(
+        [
+            HourlyMeasurement(
+                location_id="vienna",
+                target_time=target,
+                source_id="home:sensor.garden",
+                instance_id="home",
+                entity_id="sensor.garden",
+                source_name="Home / Garden",
+                temperature=16.5,
+            ),
+            HourlyMeasurement(
+                location_id="vienna",
+                target_time=target,
+                source_id="cabin:sensor.porch",
+                instance_id="cabin",
+                entity_id="sensor.porch",
+                source_name="Cabin / Porch",
+                temperature=14.5,
+            ),
+        ]
+    )
+
+    response = api.get("/api/source-comparison/vienna?hours=24")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["timezone"] == "Europe/Vienna"
+    assert payload["providers"] == ["met_no", "open_meteo"]
+    assert {source["id"] for source in payload["sources"]} == {
+        "home:sensor.garden",
+        "cabin:sensor.porch",
+    }
+    selected = next(
+        hour for hour in payload["hours"] if hour["target_time"] == target.isoformat().replace("+00:00", "Z")
+    )
+    pairs = {
+        (entry["provider"], entry["source_id"]): entry
+        for entry in selected["comparisons"]
+    }
+    assert len(pairs) == 4
+    assert pairs[("open_meteo", "home:sensor.garden")]["temperature_error"] == 1.0
+    assert pairs[("open_meteo", "home:sensor.garden")][
+        "absolute_temperature_error"
+    ] == 1.0
+    assert pairs[("open_meteo", "home:sensor.garden")]["assessment"] == "good"
+    assert pairs[("met_no", "home:sensor.garden")]["temperature_error"] == 2.0
+    assert pairs[("met_no", "home:sensor.garden")]["assessment"] == "check"
+    assert pairs[("open_meteo", "cabin:sensor.porch")]["assessment"] == "large"
+    assert pairs[("met_no", "cabin:sensor.porch")]["temperature_error"] == 4.0
+
+    missing = next(
+        hour
+        for hour in payload["hours"]
+        if hour["target_time"] != target.isoformat().replace("+00:00", "Z")
+    )["comparisons"][0]
+    assert missing["forecast_temperature"] is None
+    assert missing["measured_temperature"] is None
+    assert missing["temperature_error"] is None
+    assert missing["assessment"] is None
+
+
+def test_source_comparison_validates_period_and_location(api):
+    assert api.get("/api/source-comparison/vienna?hours=12").status_code == 422
+    assert api.get("/api/source-comparison/vienna?hours=25").status_code == 422
+    assert api.get("/api/source-comparison/mars").status_code == 404
+    assert len(api.get("/api/source-comparison/vienna?hours=48").json()["hours"]) == 48
+
+
+def test_source_comparison_fetches_each_configured_outdoor_sensor(api, service):
+    from app.clock import now_utc
+    from app.config import HomeAssistantInstance, Measurement
+
+    service.settings.observation_sources = ["home_assistant"]
+    service.settings.home_assistant_instances = [
+        HomeAssistantInstance(
+            id="home",
+            name="Home",
+            url="http://homeassistant.example:8123",
+            token="test-token",
+        )
+    ]
+    service.settings.home_assistant_measurements = [
+        Measurement(
+            instance_id="home",
+            location_id="vienna",
+            entity_id=entity_id,
+            scope=scope,
+            name=name,
+        )
+        for entity_id, scope, name in (
+            ("sensor.garden", "outdoor", "Garden"),
+            ("sensor.porch", "outdoor", "Porch"),
+            ("sensor.living_room", "indoor", "Living room"),
+        )
+    ]
+    end = now_utc().replace(minute=0, second=0, microsecond=0)
+    target = end - timedelta(hours=1)
+    service.storage.save_provider_hourly_forecasts(
+        [
+            ProviderForecast(
+                provider="open_meteo",
+                location_id="vienna",
+                issued_at=target - timedelta(hours=5),
+                hours=[HourlyForecast(target_time=target, temperature=20.0)],
+            )
+        ]
+    )
+
+    payload = api.get("/api/source-comparison/vienna?hours=24").json()
+    assert {source["id"] for source in payload["sources"]} == {
+        "home:sensor.garden",
+        "home:sensor.porch",
+    }
+    selected = next(
+        hour
+        for hour in payload["hours"]
+        if hour["target_time"] == target.isoformat().replace("+00:00", "Z")
+    )
+    assert {
+        item["source_id"]: item["measured_temperature"]
+        for item in selected["comparisons"]
+    } == {"home:sensor.garden": 18.5, "home:sensor.porch": 18.5}
+    assert service.storage.hourly_measurements(
+        "vienna", target, target + timedelta(hours=1)
+    )
 
 
 def test_refresh_archives_the_hourly_consensus(api, service):

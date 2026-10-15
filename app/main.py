@@ -368,7 +368,13 @@ def create_app(
     ) -> ObservationSourcesInfo:
         return _guard_measurements(service.add_ha_instance, body)
 
-    async def probe_measurement(body, response, service, *, history=False):
+    async def probe_measurement(
+        body: MeasurementIn,
+        response: Response,
+        service: WeatherService,
+        *,
+        history: bool = False,
+    ) -> HomeAssistantMeasurementTest | HomeAssistantMeasurementHistory:
         response.headers["Cache-Control"] = "no-store"
         try:
             return await service.probe_ha_measurement(body, history=history)

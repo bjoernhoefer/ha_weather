@@ -30,6 +30,7 @@ from ..config import (
 )
 from ..models import (
     HomeAssistantEntityInfo,
+    HomeAssistantHistoryGap,
     HomeAssistantHistorySample,
     HomeAssistantMeasurementHistory,
     HomeAssistantMeasurementTest,
@@ -54,7 +55,7 @@ def _resolve_timezone(timezone_name: str) -> ZoneInfo:
 def _as_float(value: object) -> Optional[float]:
     try:
         result = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return result if math.isfinite(result) else None
 
@@ -224,21 +225,25 @@ def _state_timestamp(value: object) -> datetime:
     return stamp.astimezone(timezone.utc)
 
 
+class UnusableTemperatureError(ValueError):
+    """Fixed, safe usability code; never contains an upstream state or error."""
+
+
 def _temperature_state(item: object, entity_id: str) -> float:
     if not isinstance(item, dict) or item.get("entity_id") != entity_id:
-        raise ValueError("invalid Home Assistant temperature state")
+        raise UnusableTemperatureError("invalid_state")
+    if not entity_id.startswith("sensor."):
+        raise UnusableTemperatureError("not_sensor")
     attributes = item.get("attributes")
     if not isinstance(attributes, dict):
-        raise ValueError("invalid Home Assistant temperature attributes")
+        raise UnusableTemperatureError("invalid_state")
+    if attributes.get("device_class") != "temperature":
+        raise UnusableTemperatureError("not_temperature")
+    if attributes.get("unit_of_measurement") not in ("°C", "C"):
+        raise UnusableTemperatureError("not_celsius")
     value = _as_float(item.get("state"))
-    if (
-        not entity_id.startswith("sensor.")
-        or isinstance(item.get("state"), bool)
-        or value is None
-        or attributes.get("device_class") != "temperature"
-        or attributes.get("unit_of_measurement") not in {"°C", "C"}
-    ):
-        raise ValueError("unusable Home Assistant Celsius temperature")
+    if isinstance(item.get("state"), bool) or value is None:
+        raise UnusableTemperatureError("not_numeric")
     return value
 
 
@@ -256,21 +261,32 @@ async def read_measurement(
         headers={"Authorization": f"{AUTH_SCHEME} {instance.token}"},
         follow_redirects=False,
     )
-    response.raise_for_status()
-    item = response.json()
-    value = _temperature_state(item, measurement.entity_id)
-    changed = _state_timestamp(item.get("last_changed"))
-    updated = _state_timestamp(item.get("last_updated"))
-    if changed > updated or updated > now_utc():
-        raise ValueError("invalid Home Assistant state timestamps")
-    return HomeAssistantMeasurementTest(
+    result = HomeAssistantMeasurementTest(
         instance_id=instance.id,
         location_id=measurement.location_id,
         entity_id=measurement.entity_id,
-        value=value,
-        last_changed=changed,
-        last_updated=updated,
     )
+    if response.status_code == 404:
+        return result.model_copy(update={"usable": False, "reason": "entity_not_found"})
+    response.raise_for_status()
+    try:
+        item = response.json()
+    except ValueError:
+        return result.model_copy(update={"usable": False, "reason": "invalid_state"})
+    try:
+        value = _temperature_state(item, measurement.entity_id)
+    except UnusableTemperatureError as exc:
+        return result.model_copy(update={"usable": False, "reason": str(exc)})
+    try:
+        changed = _state_timestamp(item.get("last_changed"))
+        updated = _state_timestamp(item.get("last_updated"))
+        if changed > updated or updated > now_utc():
+            raise ValueError("invalid timestamp order")
+    except (ValueError, TypeError, OverflowError):
+        return result.model_copy(update={"usable": False, "reason": "invalid_timestamp"})
+    return result.model_copy(update={
+        "value": value, "last_changed": changed, "last_updated": updated,
+    })
 
 
 async def read_measurement_history(
@@ -282,7 +298,7 @@ async def read_measurement_history(
 
     Full history responses retain each state's attributes so a historical
     Fahrenheit/unknown state cannot be mistaken for a Celsius sample.
-    A pre-window initial state retains its real timestamp and is labeled carried.
+    Pre-window initial states are omitted, not clamped to invented boundary events.
     """
     base_url = validate_discovery_url(instance)
     if not instance.token:
@@ -308,32 +324,28 @@ async def read_measurement_history(
     ):
         raise ValueError("invalid or excessive Home Assistant history")
     samples: List[HomeAssistantHistorySample] = []
-    carried: Optional[HomeAssistantHistorySample] = None
+    gaps: List[HomeAssistantHistoryGap] = []
     for series in history:
         for item in series:
+            if not isinstance(item, dict) or item.get("entity_id") != measurement.entity_id:
+                continue
             try:
-                value = _temperature_state(item, measurement.entity_id)
                 stamp = _state_timestamp(item.get("last_updated"))
             except (ValueError, TypeError, OverflowError):
                 continue
-            if stamp > end:
+            if stamp < start or stamp > end:
+                continue
+            try:
+                value = _temperature_state(item, measurement.entity_id)
+            except (ValueError, TypeError, OverflowError):
+                gaps.append(HomeAssistantHistoryGap(timestamp=stamp))
                 continue
             sample = HomeAssistantHistorySample(
-                timestamp=stamp, value=value, carried=stamp < start
+                timestamp=stamp, value=value
             )
-            if stamp < start:
-                if carried is None or stamp > carried.timestamp:
-                    carried = sample
-            else:
-                samples.append(sample)
-    # Invalid states must also terminate an old carried value. Only HA's
-    # initial (first) record can be the state carried into the requested window.
-    if carried is not None:
-        first = history[0][0] if history and history[0] else None
-        if isinstance(first, dict) and first.get("entity_id") == measurement.entity_id:
-            if _state_timestamp(first.get("last_updated")) == carried.timestamp:
-                samples.append(carried)
+            samples.append(sample)
     samples.sort(key=lambda sample: sample.timestamp)
+    gaps.sort(key=lambda gap: gap.timestamp)
     return HomeAssistantMeasurementHistory(
         instance_id=instance.id,
         location_id=measurement.location_id,
@@ -341,6 +353,7 @@ async def read_measurement_history(
         start=start,
         end=end,
         samples=samples,
+        gaps=gaps,
     )
 
 

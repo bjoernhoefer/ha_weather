@@ -21,7 +21,7 @@ zeigt keine deaktivierten oder anderweitig nicht geladenen Einträge aus der
 Entity Registry. Passende Nicht-Temperatur-Entities werden angezeigt, können
 aber nicht ausgewählt werden. Aktivierbar sind nur `sensor`-Entities mit der
 Geräteklasse Temperatur, einem numerischen aktuellen Zustand und einer
-Celsius-Einheit (`°C` oder `C`). Der aktuelle Zustand dient nur zur Auswahl;
+Celsius-Einheit (`°C` oder `C`). Bei der Entity-Suche dient der aktuelle Zustand zur Auswahl;
 die aufgezeichnete Historie liefert die täglichen Beobachtungen.
 
 ## Testen und letzte Werte ansehen
@@ -35,14 +35,16 @@ Temperaturen. Verbindungs-, Authentifizierungs- und Zeitüberschreitungsfehler
 werden ohne gespeicherte Zugangsdaten angezeigt. Der Test speichert keine
 Einstellungen und verändert keine Provider-Bewertung.
 
-Klappe **History** einer Messung auf, um die gleitenden letzten **24 Stunden**
+Klappe **Last 24 hours · HA recorder** neben einer Messung auf, um die gleitenden letzten **24 Stunden**
 aus dem Home-Assistant-Recorder abzurufen. Der Abschnitt ist anfangs zugeklappt
 und lädt erst beim Öffnen; über die Aktualisierung werden neuere Daten angefragt.
 Werte enthalten Zeitstempel; fehlende oder unbrauchbare Aufzeichnungen werden
 nicht erfunden. Dies ist die Recorder-Historie der Quelle, **kein Protokoll der
 bereits an ha_weather gelieferten Werte**. Der Recorder muss die Entity
-aufzeichnen; ein erfolgreicher Test des aktuellen Zustands garantiert keine
+aufzeichnen und Daten für den angefragten Zeitraum aufbewahren; ein erfolgreicher Test des aktuellen Zustands garantiert keine
 Historie. Ein leeres Ergebnis kann daher korrekt sein.
+Diese Sensorhistorie ist von den allgemeinen Dashboard-Abschnitten **History**
+und **Hourly source comparison** getrennt.
 
 Abschnittsüberschriften bleiben ohne Dreiecksmarker anklickbar und per Enter oder
 Leertaste auf- und zuklappbar.
@@ -56,13 +58,20 @@ unbemerkt zu verschieben. Löse widersprüchliche Zuordnungen vor einer
 Standortkopplung auf; andernfalls wird die Änderung abgelehnt. Für das
 vereinfachte Formular zum Hinzufügen von Messungen muss die Instanz zuerst einem
 Standort zugeordnet sein. Umgebungsverwaltete Instanzen bleiben im UI
-schreibgeschützt.
+schreibgeschützt. Für eine benannte Umgebungsinstanz wird `location_id` in
+`HAW_HOME_ASSISTANT_INSTANCES` gesetzt. Die implizite Instanz `environment` aus
+den URL-/Token-Variablen verwendet weiterhin ihre bisherigen Standortzuordnungen.
+Vorhandene Messungen mit mehreren Standorten bleiben ohne Kopplung nutzbar.
+Verwalte solche Legacy-Zuordnungen über die API mit explizitem Standort oder
+konfiguriere getrennte benannte Instanzen für den vereinfachten UI-Ablauf.
 
 Ältere API-Clients dürfen für nicht gekoppelte Instanzen weiterhin einen
 Messungsstandort übergeben. Bei gekoppelten Instanzen entfällt er oder muss dem
 Instanzstandort entsprechen; ein abweichender Standort wird abgelehnt. Eine
 Änderung der Kopplung darf weder bestehende Messungen unbemerkt verschieben noch
 archivierte Beobachtungen neu zuordnen.
+Ein gekoppelter Standort kann nicht gelöscht werden, solange eine Instanz auf
+ihn verweist. Entferne zuerst die Instanz oder löse ihre Kopplung auf.
 
 ## Stündliche Quellen vergleichen
 

@@ -11,6 +11,17 @@ Existing measurement create/update accepts omitted `location_id` for paired inst
 
 Both accept the existing measurement input shape, with optional inherited location. This works for unsaved, persisted, and environment records without requiring a database ID.
 
-Test returns usability, current numeric Celsius value when valid, timestamp and a fixed reason otherwise. History returns rolling 24-hour bounds and timestamped source Recorder samples. Empty history is valid and does not imply current-state failure.
+Test returns `source="home_assistant_state"`, `instance_id`, `location_id`,
+`entity_id`, `unit="°C"`, `usable`, nullable `reason`, `value`, `last_changed`
+and `last_updated`. Known unusable states return `usable=false` with an
+allowlisted reason: `entity_not_found`, `invalid_state`, `not_sensor`,
+`not_temperature`, `not_celsius`, `not_numeric` or `invalid_timestamp`.
+Transport failures remain sanitized 502/504 errors.
+
+History returns `source="home_assistant_recorder"`, identity fields, `unit`,
+rolling `start`/`end`, `samples` with `timestamp`/`value`, and `gaps` with
+`timestamp`/`reason="unusable_state"`. Pre-window initial states are omitted,
+not timestamp-clamped. Empty history is valid and does not imply current-state
+failure.
 
 Both routes use existing public-mode API-key requirements and configured-instance credentials only. Missing instance/location, incompatible location, missing credentials, invalid URLs, upstream timeouts and failures use sanitized existing API error conventions. No secrets, raw upstream bodies, writes, scoring updates or redirects.

@@ -20,7 +20,7 @@ The search checks Home Assistant's currently available state entities; it does
 not list disabled or otherwise unloaded entities from the entity registry.
 Matching non-temperature entities are shown but cannot be selected. Discovery
 only enables `sensor` entities with the temperature device class, a numeric
-current value, and a Celsius unit (`°C` or `C`). The current state is used only
+current value, and a Celsius unit (`°C` or `C`). During entity discovery, the current state is used
 to identify suitable candidates; recorded history supplies the daily
 observations.
 
@@ -34,13 +34,15 @@ invalid, or unsupported values are not treated as usable temperatures.
 Connectivity, authentication and timeout failures are reported without exposing
 saved credentials. Testing does not save settings or change provider scores.
 
-Expand a measurement's **History** to request its rolling last **24 hours** of
+Expand **Last 24 hours · HA recorder** beside a measurement to request its rolling last **24 hours** of
 Home Assistant Recorder values. This section starts collapsed and loads only
 when opened; refresh it to request recent data again. Values include timestamps,
 and missing or unusable records are not invented. This is source Recorder
 history, **not an audit of values previously delivered to ha_weather**. Recorder
-must retain the entity; a successful current-state test does not guarantee
+must record this entity and retain data for the requested period; a successful current-state test does not guarantee
 recorded history. An empty result can therefore be valid.
+This per-sensor history is separate from the dashboard's overall **History**
+and **Hourly source comparison** sections.
 
 Section headings remain clickable and keyboard-toggleable with Enter or Space,
 without the triangle markers.
@@ -52,12 +54,19 @@ at one valid location can show that location automatically. An instance spanning
 several locations stays in legacy mode rather than silently moving its sensors.
 Pair it only after resolving conflicting mappings; otherwise the change is
 rejected. To use the simplified add-measurement form, pair the instance first.
-Environment-managed instances remain read-only in the UI.
+Environment-managed instances remain read-only in the UI. To pair a named
+environment instance, set its `location_id` in `HAW_HOME_ASSISTANT_INSTANCES`.
+The implicit `environment` instance from URL/token variables continues to use
+its legacy per-location mappings. Existing multi-location measurements remain
+usable without pairing; use the API with explicit locations to manage legacy
+mappings, or configure separate named instances for the simplified UI workflow.
 
 Older API clients may still supply an explicit measurement location for unpaired
 instances. For a paired instance, omit it or supply the same location; a
 conflicting location is rejected. Changing a pairing must not silently move
 existing measurements or relabel archived observations.
+A paired location cannot be deleted while an instance still references it;
+remove the instance or resolve its pairing first.
 
 ## Compare hourly sources
 

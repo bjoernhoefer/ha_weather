@@ -45,8 +45,8 @@
 
 ## Phase 7: Cross-cutting
 
-- [ ] T015 [P] Update paired user guides docs/home-assistant-measurements.en.md and docs/home-assistant-measurements.de.md.
-- [ ] T016 [P] Update API/setup guidance in README.md and both languages in app/static/help.html.
+- [x] T015 [P] Update paired user guides docs/home-assistant-measurements.en.md and docs/home-assistant-measurements.de.md.
+- [x] T016 [P] Update API/setup guidance in README.md and both languages in app/static/help.html.
 - [ ] T017 Collect real regression/browser results, scan changed files for secrets and run automated review; record evidence in specs/005-ha-measurement-diagnostics/quickstart.md.
 - [ ] T018 Compare implementation with spec/plan/tasks and resolve remaining gaps in specs/005-ha-measurement-diagnostics/tasks.md.
 
@@ -57,3 +57,7 @@ Setup and contracts precede implementation. US1 supplies shared optional-locatio
 ## Implementation Strategy
 
 Deliver lossless pairing as MVP, then read-only Test and Recorder history, then marker polish and aligned documentation. Validate each slice with its narrow existing checks and finish with full relevant regression evidence. No new framework, dependency, polling process or scoring behavior.
+
+## Phase 8: Convergence
+
+- [ ] T019 Reject explicit environment measurement locations conflicting with paired instances in app/config.py and cover valid named-environment pairing and multi-location upgrade attribution in tests/test_home_assistant_measurements.py per FR-003, US1/AC2 and Constitution II (partial, HIGH).

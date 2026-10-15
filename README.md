@@ -198,12 +198,14 @@ Two additional, pluggable sources can be enabled through
   Each day's minimum/maximum sensor state becomes one observation; adding a
   measurement in the UI enables the `home_assistant` source automatically.
   **Test** checks the selected sensor's current finite Celsius temperature
-  without saving it. Each measurement also has collapsed, on-demand **History**
+  without saving it. Each measurement also has collapsed, on-demand **Last 24 hours · HA recorder**
   for the rolling last 24 hours from Home Assistant Recorder, with timestamps,
   empty/error feedback and refresh. Recorder history is not a local delivery
   audit, and a successful current-state test does not guarantee recorded data.
   Tokens are stored in the database and never returned by the API. Deleting
-  an instance or location also deletes its measurements. Previously saved
+  an instance also deletes its measurements. A location still paired with a
+  Home Assistant instance cannot be deleted; remove or resolve the pairing
+  first. Deleting an unpaired UI location also deletes its measurements. Previously saved
   single-instance UI settings are migrated to an instance named
   *Home Assistant*.
 * **`elasticsearch`** – aggregates a numeric temperature field per day (daily

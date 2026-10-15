@@ -385,15 +385,27 @@ class HomeAssistantMeasurementTest(BaseModel):
     location_id: str
     entity_id: str
     unit: Literal["°C"] = "°C"
-    value: float
-    last_changed: datetime
-    last_updated: datetime
+    usable: bool = True
+    reason: Optional[Literal[
+        "entity_not_found", "invalid_state", "not_sensor", "not_temperature",
+        "not_celsius", "not_numeric", "invalid_timestamp",
+    ]] = None
+    value: Optional[float] = None
+    last_changed: Optional[datetime] = None
+    last_updated: Optional[datetime] = None
 
 
 class HomeAssistantHistorySample(BaseModel):
     timestamp: datetime
     value: float
     carried: bool = False
+
+
+class HomeAssistantHistoryGap(BaseModel):
+    """An unusable recorded state terminates a numeric history segment."""
+
+    timestamp: datetime
+    reason: Literal["unusable_state"] = "unusable_state"
 
 
 class HomeAssistantMeasurementHistory(BaseModel):
@@ -407,6 +419,7 @@ class HomeAssistantMeasurementHistory(BaseModel):
     start: datetime
     end: datetime
     samples: List[HomeAssistantHistorySample] = Field(default_factory=list)
+    gaps: List[HomeAssistantHistoryGap] = Field(default_factory=list)
 
 
 class HomeAssistantSettingsInfo(BaseModel):

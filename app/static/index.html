@@ -60,7 +60,7 @@
       button { cursor: pointer; font-size: .88rem; font-weight: 650; transition: background .15s, border-color .15s, transform .15s; }
       button:hover { border-color: #a9c8b5; background: var(--accent-soft); }
       button:active { transform: translateY(1px); }
-      button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid #78b99a88; outline-offset: 2px; }
+      button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
       #refresh { border-color: var(--accent); background: var(--accent); color: white; }
       #refresh:hover { background: #1d624b; }
       #status { min-height: 1.2rem; margin-top: .75rem; }
@@ -73,7 +73,7 @@
       summary { cursor: pointer; list-style: none; }
       summary::marker { content: ""; }
       summary::-webkit-details-marker { display: none; }
-      summary:focus-visible { outline: 3px solid #78b99a; outline-offset: 4px; border-radius: .2rem; }
+      summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; border-radius: .2rem; }
       details.fold > summary > h2, details.fold > summary > h3 { display: inline; margin: 0; }
       details.fold > summary > h2 { font-size: 1.2rem; }
       details.fold > summary > h3 { font-size: 1rem; }
@@ -110,7 +110,8 @@
       #haInstanceForm, #measurementForm { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; }
       #haInstanceForm > label, #measurementForm > label { display: grid; gap: .3rem; min-width: 0; }
       #haInstanceForm input, #haInstanceForm select, #measurementForm input, #measurementForm select { width: 100%; min-width: 0; }
-      #measurementForm .entity-discovery, .ha-form-status { grid-column: 1 / -1; }
+      #measurementForm .entity-discovery, .ha-form-status, .ha-form-actions { grid-column: 1 / -1; }
+      .ha-form-actions > button { flex: 1 1 10rem; }
       .ha-form-status { margin: 0; overflow-wrap: anywhere; }
       .ha-diagnostics { min-width: 16rem; max-width: 28rem; white-space: normal; overflow-wrap: anywhere; }
       .ha-diagnostics p { margin: .5rem 0; }
@@ -131,7 +132,6 @@
       .assessment-good { color: #167348; }
       .assessment-check { color: #8a6200; }
       .assessment-large { color: #b44d32; }
-      #loggingSection > summary:focus-visible { outline: 3px solid #78b99a88; outline-offset: 4px; }
       .log-controls { margin-top: 1rem; }
       .log-controls label { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; min-width: 0; max-width: 100%; }
       .log-controls select { max-width: 100%; }
@@ -160,6 +160,8 @@
         .dashboard-controls button { flex: initial; }
         .entity-discovery .entity-search-controls { grid-template-columns: minmax(0, 1fr); }
         #haInstanceForm, #measurementForm { grid-template-columns: minmax(0, 1fr); }
+        #measurementsSection form.bar > label { display: grid; gap: .3rem; width: 100%; min-width: 0; }
+        #measurementsSection form.bar input, #measurementsSection form.bar select { width: 100%; min-width: 0; max-width: 100%; }
         details.fold { padding: 1rem; }
       }
       @media (min-width: 641px) and (max-width: 900px) {
@@ -387,8 +389,10 @@
         <label>Location <select id="haLocation" required></select></label>
         <label>URL <input id="haUrl" type="url" maxlength="500" placeholder="http://homeassistant.local:8123" /></label>
         <label>Long-lived token <input id="haToken" type="password" autocomplete="off" maxlength="500" placeholder="token" /></label>
-        <button type="submit" id="haInstanceSubmit">Add instance</button>
-        <button type="button" id="haInstanceCancel" hidden>Cancel</button>
+        <div class="bar ha-form-actions">
+          <button type="submit" id="haInstanceSubmit">Add instance</button>
+          <button type="button" id="haInstanceCancel" hidden>Cancel</button>
+        </div>
       </form>
 
       <h3>Measurements</h3>
@@ -399,8 +403,7 @@
         <tbody id="measurements"></tbody>
       </table>
       <form id="measurementForm" class="bar">
-        <label>Instance <select id="measurementInstance" required></select></label>
-        <p id="measurementLocation" class="muted ha-form-status" role="status"></p>
+        <label>Instance <select id="measurementInstance" required aria-describedby="measurementLocation"></select></label>
         <label>Entity <input id="measurementEntity" required maxlength="200" pattern="[a-z0-9_]+\.[a-z0-9_]+" placeholder="sensor.garden_temperature" /></label>
         <label>Scope
           <select id="measurementScope">
@@ -409,6 +412,7 @@
           </select>
         </label>
         <label>Name <input id="measurementName" maxlength="100" placeholder="optional" /></label>
+        <p id="measurementLocation" class="muted ha-form-status" role="status"></p>
         <div class="entity-discovery" aria-describedby="haEntitySearchDescription">
           <p id="haEntitySearchDescription" class="muted">
             Search currently available Home Assistant entities by display name or ID. Only numeric temperature sensors in &deg;C can be selected; other matches are shown for reference.
@@ -424,9 +428,11 @@
           </label>
           <p id="haEntitySearchStatus" class="muted" role="status" aria-live="polite"></p>
         </div>
-        <button type="submit" id="measurementSubmit">Add measurement</button>
-        <button type="button" id="measurementTest">Test measurement</button>
-        <button type="button" id="measurementCancel" hidden>Cancel</button>
+        <div class="bar ha-form-actions">
+          <button type="submit" id="measurementSubmit">Add measurement</button>
+          <button type="button" id="measurementTest">Test measurement</button>
+          <button type="button" id="measurementCancel" hidden>Cancel</button>
+        </div>
         <p id="measurementTestStatus" class="muted ha-form-status" role="status" aria-live="polite"></p>
       </form>
 
@@ -1163,7 +1169,8 @@
         const oldLocations = new Set((ha?.measurements || [])
           .filter((item) => item.instance_id === instance.id && item.location_id)
           .map((item) => item.location_id));
-        return oldLocations.size === 1 ? [...oldLocations][0] : null;
+        const inferred = oldLocations.size === 1 ? [...oldLocations][0] : null;
+        return locations.some((location) => location.id === inferred) ? inferred : null;
       }
 
       function measurementPayload() {
@@ -1185,13 +1192,24 @@
         const pairedLocation = instanceLocation(instance);
         const retained = editingMeasurementRecord?.location_id;
         const mismatch = retained && pairedLocation && retained !== pairedLocation;
-        $("measurementLocation").textContent = retained
+        const unchangedLegacyPair = !!instance && retained &&
+          editingMeasurementRecord.instance_id === payload.instance_id &&
+          locations.some((location) => location.id === retained);
+        const locationText = retained
           ? `Location: ${locationName(retained)} — existing measurement location retained.` +
-            (mismatch ? " This instance is paired elsewhere. Saving is blocked; test and history retain the original location." : "")
+            (mismatch ? " This instance is paired elsewhere. Saving is blocked; test and history retain the original location."
+              : !pairedLocation
+                ? unchangedLegacyPair
+                  ? " This legacy record keeps its original instance and location. Pair the instance before adding new measurements."
+                  : " Pair the instance before saving. Saved records can still be tested or viewed below."
+                : "")
           : pairedLocation
             ? `Location: ${locationName(pairedLocation)} — inherited from the instance.`
             : "Location: not paired. Edit the instance and choose a location before adding a measurement. For read-only instances, update the environment configuration.";
-        $("measurementSubmit").disabled = !payload.instance_id || !pairedLocation || !!mismatch;
+        if ($("measurementLocation").textContent !== locationText) {
+          $("measurementLocation").textContent = locationText;
+        }
+        $("measurementSubmit").disabled = !payload.instance_id || (!pairedLocation && !unchangedLegacyPair) || !!mismatch;
         $("measurementTest").disabled = !payload.instance_id || !payload.location_id;
       }
 
@@ -1216,37 +1234,38 @@
             method: "POST", body: JSON.stringify(payload),
           });
           if (!isCurrent()) return;
-          status.textContent = result.usable && typeof result.value_c === "number" && Number.isFinite(result.value_c)
-            ? `${result.value_c} °C · ${diagnosticTime(result.observed_at)}`
-            : diagnosticReason(result.reason);
+          status.textContent = typeof result.value === "number" && Number.isFinite(result.value)
+            ? `Current state: ${result.value} °C · ${diagnosticTime(result.last_updated || result.last_changed)}`
+            : "No usable Celsius temperature is available. Check the entity state and temperature unit.";
         } catch (error) {
-          if (isCurrent()) status.textContent = "Test unavailable. Check the instance connection and API access, then retry.";
+          if (isCurrent()) status.textContent = diagnosticFailure(error, false);
         } finally {
           if (isCurrent()) trigger.disabled = false;
         }
       }
 
-      function diagnosticReason(reason) {
-        const reasons = {
-          instance_unavailable: "Home Assistant instance is unavailable. Check its URL and token.",
-          entity_not_found: "Entity not found. Check the entity ID or search again.",
-          unavailable: "The entity is currently unavailable.",
-          unknown: "The entity has no known value yet.",
-          invalid_unit: "This entity is not a Celsius temperature sensor.",
-          non_numeric: "This entity has no numeric temperature value.",
-          recorder_unavailable: "Home Assistant recorder history is unavailable. Check recorder access and configuration.",
-        };
-        return reasons[reason] || "No usable Celsius temperature is available. Check the entity state, temperature unit and instance configuration.";
+      function diagnosticFailure(error, history) {
+        // Never echo upstream error bodies, URLs or tokens into diagnostics.
+        const code = String(error?.message || "").match(/^(\d{3}):/)?.[1];
+        if (code === "401") return "API access is required. Enter the API key in General settings, then retry.";
+        if (code === "404") return "The instance or location could not be found. Reload the configuration and check the saved measurement.";
+        if (code === "409") return "The location pairing is not usable. Check the instance location; existing measurement locations are retained.";
+        if (code === "422") return "The measurement configuration is invalid. Check the entity ID and instance location.";
+        if (code === "504") return "Home Assistant did not respond in time. Retry when the instance is available.";
+        return history
+          ? "History unavailable. Check the instance connection and recorder access, then retry."
+          : "No usable Celsius temperature could be read. Check the entity state, temperature unit, instance URL and token, then retry.";
       }
 
       function measurementHistory(payload) {
         const details = document.createElement("details");
         const summary = document.createElement("summary");
         summary.textContent = "Last 24 hours · HA recorder";
+        summary.setAttribute("aria-label", `Last 24 hours of HA recorder history for ${payload.entity_id}`);
         const status = document.createElement("p");
         status.className = "muted";
         status.setAttribute("role", "status");
-        status.textContent = "Open to load Home Assistant recorder values. Times are UTC.";
+        status.textContent = "Open to load the rolling last 24 hours from Home Assistant recorder. Times are UTC; missing or unavailable periods are not filled.";
         const list = document.createElement("ol");
         list.className = "ha-history-list";
         list.setAttribute("aria-label", `${payload.entity_id} recorder temperatures`);
@@ -1268,29 +1287,29 @@
               method: "POST", body: JSON.stringify(payload),
             });
             if (!details.isConnected || current !== request) return;
-            if (!Array.isArray(result.points)) throw new Error("Invalid history response");
-            const points = result.points.filter((point) =>
-              typeof point.value_c === "number" && Number.isFinite(point.value_c) &&
-              point.observed_at && Number.isFinite(new Date(point.observed_at).getTime())
+            if (!Array.isArray(result.samples)) throw new Error("Invalid history response");
+            const points = result.samples.filter((point) =>
+              typeof point.value === "number" && Number.isFinite(point.value) &&
+              point.timestamp && Number.isFinite(new Date(point.timestamp).getTime())
             );
             points.forEach((point) => {
               const item = document.createElement("li");
               const time = document.createElement("time");
-              time.dateTime = new Date(point.observed_at).toISOString();
-              time.textContent = diagnosticTime(point.observed_at);
-              item.append(time, document.createTextNode(` · ${point.value_c} °C`));
+              time.dateTime = new Date(point.timestamp).toISOString();
+              time.textContent = diagnosticTime(point.timestamp);
+              item.append(time, document.createTextNode(
+                ` · ${point.value} °C${point.carried ? " (prior state carried to window start)" : ""}`
+              ));
               list.appendChild(item);
             });
             loaded = true;
-            status.textContent = result.reason
-              ? diagnosticReason(result.reason)
-              : points.length
-                ? `${points.length} recorded values · UTC. From HA recorder, not the forecast archive.`
+            status.textContent = points.length
+                ? `${points.length} recorded values · UTC. From HA recorder, not the forecast archive. Missing or unavailable periods remain gaps.`
                 : "No usable Celsius values recorded in the last 24 hours.";
             refresh.textContent = "Refresh history";
           } catch (error) {
             if (!details.isConnected || current !== request) return;
-            status.textContent = "History unavailable. Check the instance connection and recorder access, then retry.";
+            status.textContent = diagnosticFailure(error, true);
             refresh.textContent = "Retry history";
           } finally {
             loading = false;
@@ -1611,6 +1630,7 @@
       $("haInstanceCancel").addEventListener("click", resetInstanceForm);
       $("haInstanceForm").addEventListener("submit", async (event) => {
         event.preventDefault();
+        const submittedInstance = editingInstance;
         const payload = {
           name: $("haName").value.trim(),
           location_id: $("haLocation").value,
@@ -1626,8 +1646,12 @@
             body: JSON.stringify(payload),
           }));
           clearEntityDiscovery("Search again after changing the Home Assistant instance.");
-          setStatus(`Home Assistant instance ${payload.name} ${editingInstance ? "saved" : "added"}.`);
-          resetInstanceForm();
+          setStatus(`Home Assistant instance ${payload.name} ${submittedInstance ? "saved" : "added"}.`);
+          if (editingInstance === submittedInstance &&
+              $("haName").value.trim() === payload.name &&
+              $("haLocation").value === payload.location_id &&
+              ($("haUrl").value.trim() || null) === payload.url &&
+              ($("haToken").value.trim() || null) === payload.token) resetInstanceForm();
         } catch (error) { setStatus(error.message); }
       });
 
@@ -1665,6 +1689,7 @@
         updateMeasurementLocation();
         if ($("measurementSubmit").disabled) return;
         const payload = measurementPayload();
+        const submittedMeasurement = editingMeasurement;
         if (!payload.instance_id) { setStatus("Please add a Home Assistant instance first."); return; }
         try {
           const path = editingMeasurement
@@ -1674,8 +1699,9 @@
             method: editingMeasurement ? "PUT" : "POST",
             body: JSON.stringify(payload),
           }));
-          setStatus(`Measurement ${payload.entity_id} ${editingMeasurement ? "saved" : "added"}.`);
-          resetMeasurementForm();
+          setStatus(`Measurement ${payload.entity_id} ${submittedMeasurement ? "saved" : "added"}.`);
+          if (editingMeasurement === submittedMeasurement &&
+              JSON.stringify(measurementPayload()) === JSON.stringify(payload)) resetMeasurementForm();
         } catch (error) { setStatus(error.message); }
       });
 

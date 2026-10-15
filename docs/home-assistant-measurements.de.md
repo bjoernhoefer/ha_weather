@@ -22,6 +22,31 @@ Geräteklasse Temperatur, einem numerischen aktuellen Zustand und einer
 Celsius-Einheit (`°C` oder `C`). Der aktuelle Zustand dient nur zur Auswahl;
 die aufgezeichnete Historie liefert die täglichen Beobachtungen.
 
+## Stündliche Quellen vergleichen
+
+Nachdem Prognosen aktualisiert wurden, öffne **Hourly source comparison** im
+Dashboard. Dort wird die Temperatur jeder archivierten Wetterquelle einzeln
+mit jedem konfigurierten Home-Assistant-Außenfühler derselben Stunde verglichen.
+Sensoren verschiedener Instanzen bleiben getrennt. Die Matrix zeigt eine
+ausgewählte Stunde; die Detailtabelle listet alle Quellenpaare des gewählten
+Zeitraums von 24, 48 oder 72 Stunden. Die Uhrzeiten folgen der Zeitzone des
+Standorts.
+
+Die Abweichung ist Prognose minus Messwert; der absolute Fehler wird separat
+angezeigt. Die Bewertung lautet `Good` bis einschließlich 1 °C, `Check` über
+1 °C bis einschließlich 2 °C und `Large` über 2 °C. Das sind beschreibende
+Temperaturstufen, kein Provider-Ranking-Score. Fehlt ein Wert oder weist die
+Home-Assistant-Historie keinen Celsius-Temperatursensor aus, sind Fehler und
+Bewertung nicht verfügbar. `unavailable` und andere ungültige Zustände gelten
+nicht als Messwerte.
+Ein aufgezeichneter Wert wird weitergeführt, solange sich der Sensorzustand
+nicht ändert; die Auswertung setzt keine zusätzliche Aktualitätsgrenze.
+
+Verglichen werden nur quellenspezifische Prognosen, die nach Bereitstellung
+dieser Funktion gesammelt wurden. Neue Stundenwerte bleiben bis zu 72 Stunden
+erhalten; bestehende Konsenswerte lassen sich keinen einzelnen Providern
+zuordnen und werden nicht rückwirkend ergänzt.
+
 ## Fehlerbehebung
 
 - **Keine Treffer**: Suche nach einem anderen Teil des Anzeigenamens oder der

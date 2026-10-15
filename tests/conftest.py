@@ -238,6 +238,24 @@ def mock_transport(today: date) -> httpx.MockTransport:
         if host == "external.invalid":
             return httpx.Response(200, json=[])
         if host and host.startswith("homeassistant."):
+            if request.url.path.startswith("/api/history/period/"):
+                end_time = datetime.fromisoformat(request.url.params["end_time"])
+                target_time = end_time - timedelta(hours=1)
+                return httpx.Response(
+                    200,
+                    json=[
+                        [
+                            {
+                                "state": "18.5",
+                                "last_changed": target_time.isoformat(),
+                                "attributes": {
+                                    "unit_of_measurement": "°C",
+                                    "device_class": "temperature",
+                                },
+                            }
+                        ]
+                    ],
+                )
             if request.url.path == "/api/states":
                 if not request.headers.get("Authorization", "").startswith("Bearer "):
                     return httpx.Response(401, json={"message": "unauthorized"})

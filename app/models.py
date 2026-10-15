@@ -31,6 +31,58 @@ class HourlyForecast(BaseModel):
     condition: Optional[str] = None
 
 
+class HourlyMeasurement(BaseModel):
+    """One hourly temperature value from a distinct Home Assistant sensor."""
+
+    location_id: str
+    target_time: datetime
+    source_id: str
+    instance_id: str
+    entity_id: str
+    source_name: str
+    temperature: float
+
+
+class ComparisonSource(BaseModel):
+    """A Home Assistant source represented in hourly comparisons."""
+
+    id: str
+    name: str
+
+
+class HourlySourceComparison(BaseModel):
+    """One provider/sensor comparison for a single UTC hour."""
+
+    provider: str
+    source_id: str
+    source_name: str
+    forecast_temperature: Optional[float] = None
+    measured_temperature: Optional[float] = None
+    temperature_error: Optional[float] = None
+    absolute_temperature_error: Optional[float] = None
+    assessment: Optional[Literal["good", "check", "large"]] = None
+
+
+class SourceComparisonHour(BaseModel):
+    """All provider/sensor pairs for one target hour."""
+
+    target_time: datetime
+    comparisons: List[HourlySourceComparison] = Field(default_factory=list)
+
+
+class SourceComparisonHistory(BaseModel):
+    """Bounded hourly comparison data for one location."""
+
+    location_id: str
+    timezone: str
+    generated_at: datetime
+    start: datetime
+    end: datetime
+    providers: List[str] = Field(default_factory=list)
+    sources: List[ComparisonSource] = Field(default_factory=list)
+    hours: List[SourceComparisonHour] = Field(default_factory=list)
+
+
 class ProviderForecast(BaseModel):
     """The full forecast a provider returned for one location."""
 

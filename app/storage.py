@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 import threading
@@ -20,6 +21,7 @@ from .config import (
 from .models import (
     AggregatedHour,
     CustomSource,
+    HourlyMeasurement,
     Observation,
     ProviderForecast,
     ProviderOverride,
@@ -127,6 +129,24 @@ CREATE TABLE IF NOT EXISTS hourly_predictions (
     wind_speed REAL,
     condition TEXT,
     PRIMARY KEY (location_id, target_time)
+);
+CREATE TABLE IF NOT EXISTS provider_hourly_forecasts (
+    provider TEXT NOT NULL,
+    location_id TEXT NOT NULL,
+    target_time TEXT NOT NULL,
+    issued_at TEXT NOT NULL,
+    temperature REAL,
+    PRIMARY KEY (provider, location_id, target_time)
+);
+CREATE TABLE IF NOT EXISTS hourly_measurements (
+    location_id TEXT NOT NULL,
+    target_time TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    instance_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    temperature REAL NOT NULL,
+    PRIMARY KEY (location_id, source_id, target_time)
 );
 """
 
@@ -812,6 +832,8 @@ class Storage:
                     "measurements",
                     "es_measurements",
                     "hourly_predictions",
+                    "provider_hourly_forecasts",
+                    "hourly_measurements",
                     "forecasts",
                     "observations",
                     "overrides",
@@ -821,6 +843,153 @@ class Storage:
                     )
             self._connection.commit()
         return deleted
+
+    # ------------------------------------------------------------------
+    # source-specific hourly comparison archive
+    # ------------------------------------------------------------------
+    def save_provider_hourly_forecasts(
+        self, forecasts: List[ProviderForecast]
+    ) -> int:
+        """Archive the first future hourly temperature forecast per provider."""
+        rows = []
+        for forecast in forecasts:
+            issued = _as_utc(forecast.issued_at)
+            for hour in forecast.hours:
+                target = _as_utc(hour.target_time)
+                if target <= issued:
+                    continue
+                temperature = hour.temperature
+                if temperature is not None and not math.isfinite(temperature):
+                    temperature = None
+                rows.append(
+                    (
+                        forecast.provider,
+                        forecast.location_id,
+                        target.isoformat(),
+                        issued.isoformat(),
+                        temperature,
+                    )
+                )
+        cutoff = (
+            now_utc() - timedelta(days=HOURLY_PREDICTION_RETENTION_DAYS)
+        ).isoformat()
+        with self._lock:
+            self._connection.executemany(
+                """
+                INSERT INTO provider_hourly_forecasts
+                    (provider, location_id, target_time, issued_at, temperature)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (provider, location_id, target_time)
+                DO UPDATE SET
+                    issued_at=CASE
+                        WHEN provider_hourly_forecasts.temperature IS NULL
+                            AND excluded.temperature IS NOT NULL
+                        THEN excluded.issued_at
+                        ELSE provider_hourly_forecasts.issued_at
+                    END,
+                    temperature=COALESCE(
+                        provider_hourly_forecasts.temperature, excluded.temperature
+                    )
+                """,
+                rows,
+            )
+            self._connection.execute(
+                "DELETE FROM provider_hourly_forecasts WHERE target_time < ?",
+                (cutoff,),
+            )
+            self._connection.commit()
+        return len(rows)
+
+    def provider_hourly_forecasts(
+        self, location_id: str, start: datetime, end: datetime
+    ) -> List[sqlite3.Row]:
+        """Source-specific hourly forecasts in the half-open UTC interval."""
+        with self._lock:
+            return list(
+                self._connection.execute(
+                    """
+                    SELECT * FROM provider_hourly_forecasts
+                    WHERE location_id = ? AND target_time >= ? AND target_time < ?
+                    ORDER BY target_time, provider
+                    """,
+                    (
+                        location_id,
+                        _as_utc(start).isoformat(),
+                        _as_utc(end).isoformat(),
+                    ),
+                )
+            )
+
+    def save_hourly_measurements(
+        self, measurements: List[HourlyMeasurement]
+    ) -> int:
+        """Upsert each sensor's own hourly value without merging sources."""
+        rows = [
+            (
+                item.location_id,
+                _as_utc(item.target_time).isoformat(),
+                item.source_id,
+                item.instance_id,
+                item.entity_id,
+                item.source_name,
+                item.temperature,
+            )
+            for item in measurements
+        ]
+        cutoff = (
+            now_utc() - timedelta(days=HOURLY_PREDICTION_RETENTION_DAYS)
+        ).isoformat()
+        with self._lock:
+            self._connection.executemany(
+                """
+                INSERT INTO hourly_measurements
+                    (location_id, target_time, source_id, instance_id, entity_id,
+                     source_name, temperature)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (location_id, source_id, target_time)
+                DO UPDATE SET instance_id=excluded.instance_id,
+                    entity_id=excluded.entity_id, source_name=excluded.source_name,
+                    temperature=excluded.temperature
+                """,
+                rows,
+            )
+            self._connection.execute(
+                "DELETE FROM hourly_measurements WHERE target_time < ?", (cutoff,)
+            )
+            self._connection.commit()
+        return len(rows)
+
+    def hourly_measurements(
+        self, location_id: str, start: datetime, end: datetime
+    ) -> List[HourlyMeasurement]:
+        """Return independently identified sensor readings in a UTC interval."""
+        with self._lock:
+            rows = list(
+                self._connection.execute(
+                    """
+                    SELECT * FROM hourly_measurements
+                    WHERE location_id = ? AND target_time >= ? AND target_time < ?
+                    ORDER BY target_time, source_id
+                    """,
+                    (
+                        location_id,
+                        _as_utc(start).isoformat(),
+                        _as_utc(end).isoformat(),
+                    ),
+                )
+            )
+        return [
+            HourlyMeasurement(
+                location_id=row["location_id"],
+                target_time=datetime.fromisoformat(row["target_time"]),
+                source_id=row["source_id"],
+                instance_id=row["instance_id"],
+                entity_id=row["entity_id"],
+                source_name=row["source_name"],
+                temperature=row["temperature"],
+            )
+            for row in rows
+        ]
 
     # ------------------------------------------------------------------
     # hourly consensus archive (history of the last 24 hours)

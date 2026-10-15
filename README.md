@@ -257,7 +257,7 @@ others or the forecast refresh.
 | `POST /api/observation-sources/elasticsearch/measurements` | add a field mapping `{"instance_id": "elastic_cloud", "location_id": "vienna", "field": "outdoor_temp", "scope": "outdoor", "name": ""}` |
 | `PUT /api/observation-sources/elasticsearch/measurements/{id}` | update a field mapping |
 | `DELETE /api/observation-sources/elasticsearch/measurements/{id}` | remove a field mapping |
-| `GET /api/history/{location}` | last 24 hours: archived hourly prediction vs. measured values, MAE and bias |
+| `GET /api/history/{location}` | legacy last-24-hour consensus comparison; separate from source-specific verification |
 | `GET /api/providers` | registered providers and their availability |
 | `GET /api/sources` | source control: all built-in and custom sources with their state |
 | `GET /api/sources/catalog` | suggested keyless Open-Meteo models for custom sources |
@@ -268,6 +268,7 @@ others or the forecast refresh.
 | `DELETE /api/sources/{name}/api-key` | remove the key set in the UI (the environment key applies again) |
 | `GET /api/forecast/{location}` | consensus (`hourly`, `four_hourly`, `days`) + per provider forecast, ranking and season |
 | `POST /api/forecast/{location}/refresh` | force a new query of all providers |
+| `GET /api/source-comparison/{location}?hours=24` | hourly provider-by-outdoor-Home-Assistant-sensor temperature comparison for 24, 48 or 72 hours |
 | `GET /api/ranking/{location}` | Top/Low provider list |
 | `PUT /api/ranking/{location}/{provider}` | manual override `{"manual_rank": 1, "enabled": true}` |
 | `DELETE /api/ranking/{location}/{provider}` | remove the manual override |

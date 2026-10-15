@@ -390,3 +390,117 @@ def test_home_assistant_hourly_means_carry_values_forward():
         start.replace(hour=2): 14.0,
         start.replace(hour=3): 17.0,  # 14.0 carried + 20.0 of the second sensor
     }
+
+
+async def test_home_assistant_hourly_measurements_preserve_sources_and_reject_invalid(
+    monkeypatch,
+):
+    from datetime import datetime, timezone
+
+    from app.config import HomeAssistantInstance, Measurement
+    from app.obs_sources.home_assistant import HomeAssistantObservationSource
+
+    settings = Settings(
+        observation_sources=["home_assistant"],
+        home_assistant_instances=[
+            HomeAssistantInstance(
+                id="home",
+                name="Home",
+                url="http://homeassistant.local:8123",
+                token="secret",
+            )
+        ],
+        home_assistant_measurements=[
+            Measurement(
+                instance_id="home",
+                location_id="vienna",
+                entity_id=entity_id,
+                scope="outdoor",
+                name=entity_id.split(".")[-1],
+            )
+            for entity_id in (
+                "sensor.garden",
+                "sensor.fahrenheit",
+                "sensor.not_finite",
+                "sensor.broken",
+            )
+        ],
+    )
+    start = datetime(2024, 1, 1, 10, tzinfo=timezone.utc)
+    calls = []
+
+    async def history(
+        self, client, instance, entity_ids, start, end, minimal_response=True
+    ):
+        entity_id = entity_ids[0]
+        calls.append(entity_id)
+        if entity_id == "sensor.broken":
+            raise httpx.HTTPError("unavailable")
+        value = "18.5" if entity_id == "sensor.garden" else "60"
+        unit = "°C" if entity_id != "sensor.fahrenheit" else "°F"
+        if entity_id == "sensor.not_finite":
+            value = "nan"
+        return [
+            [
+                {
+                    "state": value,
+                    "last_changed": start.isoformat(),
+                    "attributes": {
+                        "unit_of_measurement": unit,
+                        "device_class": "temperature",
+                    },
+                }
+            ]
+        ]
+
+    monkeypatch.setattr(HomeAssistantObservationSource, "_history", history)
+    source = HomeAssistantObservationSource(settings)
+    async with httpx.AsyncClient() as client:
+        readings = await source.fetch_hourly_by_measurement(
+            client, VIENNA, start, start + timedelta(hours=1)
+        )
+
+    assert sorted(calls) == [
+        "sensor.broken",
+        "sensor.fahrenheit",
+        "sensor.garden",
+        "sensor.not_finite",
+    ]
+    assert [
+        (reading.source_id, reading.source_name, reading.temperature)
+        for reading in readings
+    ] == [("home:sensor.garden", "Home / garden", 18.5)]
+
+
+def test_home_assistant_temperature_history_distinguishes_repeated_dst_hour():
+    from datetime import datetime, timezone
+
+    from app.obs_sources.home_assistant import hourly_temperature_means
+
+    history = [
+        [
+            {
+                "state": "10",
+                "last_changed": "2024-10-27T02:15:00+02:00",
+                "attributes": {
+                    "unit_of_measurement": "°C",
+                    "device_class": "temperature",
+                },
+            },
+            {
+                "state": "12",
+                "last_changed": "2024-10-27T02:15:00+01:00",
+                "attributes": {
+                    "unit_of_measurement": "°C",
+                    "device_class": "temperature",
+                },
+            },
+        ]
+    ]
+    start = datetime(2024, 10, 27, 0, tzinfo=timezone.utc)
+    means = hourly_temperature_means(history, start, start + timedelta(hours=4))
+
+    assert means[start + timedelta(hours=0)] == 10.0
+    assert means[start + timedelta(hours=1)] == 11.0
+    assert means[start + timedelta(hours=2)] == 12.0
+    assert means[start + timedelta(hours=3)] == 12.0

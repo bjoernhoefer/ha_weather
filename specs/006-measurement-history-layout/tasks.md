@@ -16,7 +16,7 @@
 full-width chronological UTC/Celsius table appears.
 
 - [x] T003 [US1] Add separate history row, accessible unnumbered table and mobile styles in app/static/index.html.
-- [ ] T004 [P] [US1] Cover lazy fetch, chronological filtering, gaps, errors and detached results in tests/test_measurement_history_ui.py.
+- [x] T004 [P] [US1] Cover lazy fetch, chronological filtering, gaps, errors and detached results in tests/test_measurement_history_ui.py.
 
 ## Phase 4: US2 — Optional trend (P2)
 
@@ -24,14 +24,14 @@ full-width chronological UTC/Celsius table appears.
 the same window/data and breaks at gaps.
 
 - [x] T005 [US2] Add on-click SVG with finite single/constant/negative data handling and refresh reset in app/static/index.html.
-- [ ] T006 [P] [US2] Test lazy chart, gap segmentation and stale-chart reset in tests/test_measurement_history_ui.py.
+- [x] T006 [P] [US2] Test lazy chart, gap segmentation and stale-chart reset in tests/test_measurement_history_ui.py.
 
 ## Phase 5: Completion
 
 - [x] T007 [P] Update paired docs/home-assistant-measurements.de.md and docs/home-assistant-measurements.en.md.
 - [x] T008 Remove preview-temporary/measurements-desktop.png and preview-temporary/measurements-mobile.png.
-- [ ] T009 Run relevant and full existing pytest suite; record evidence in specs/006-measurement-history-layout/quickstart.md.
-- [ ] T010 Scan changed files and run code/security review; check convergence against specs/006-measurement-history-layout/spec.md.
+- [x] T009 Run relevant and full existing pytest suite; record evidence in specs/006-measurement-history-layout/quickstart.md.
+- [x] T010 Scan changed files and run code/security review; check convergence against specs/006-measurement-history-layout/spec.md.
 
 ## Dependencies and strategy
 

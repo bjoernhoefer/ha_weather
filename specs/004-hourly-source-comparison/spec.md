@@ -59,8 +59,8 @@ As a dashboard user, I want to choose a recent time range and inspect hour-by-ho
 - **FR-002**: The dashboard MUST compare provider forecasts only with configured outdoor Home Assistant temperature sensors, preserving instance and sensor identity.
 - **FR-003**: The dashboard MUST provide a compact matrix for a selected hour, with Home Assistant sensors as rows and internet sources as columns.
 - **FR-004**: Each populated comparison MUST show the forecast value, measured value, signed deviation (forecast minus measured), absolute error, and a temperature-specific assessment.
-- **FR-005**: The dashboard MUST provide a detailed table for the selected hour and selected recent time range, with one row per hour, internet source, and Home Assistant sensor combination.
-- **FR-006**: Users MUST be able to select a supported recent time range and an hour within it; matrix and detail table MUST remain synchronized.
+- **FR-005**: The dashboard MUST provide a detailed table for the selected recent time range, with one row per hour, internet source, and Home Assistant sensor combination.
+- **FR-006**: Users MUST be able to select a supported recent time range and an hour within it; the matrix MUST reflect the selected hour while the detailed table reflects the selected range.
 - **FR-007**: Missing forecasts or measurements MUST be clearly represented without inventing an error or rating.
 - **FR-008**: Assessment MUST be based on absolute temperature error, in Celsius, and MUST NOT combine temperature with precipitation or other unlike units.
 - **FR-009**: The comparison MUST remain usable on narrow screens and with keyboard navigation.
@@ -80,7 +80,7 @@ As a dashboard user, I want to choose a recent time range and inspect hour-by-ho
 - **SC-001**: With two providers and three configured outdoor Home Assistant sensors, users can see all six source pairings for an hour in the matrix and in the detailed rows.
 - **SC-002**: For every pair with both values present, the shown signed deviation equals forecast minus measurement and the absolute error equals its magnitude.
 - **SC-003**: For any pair missing either value, the view shows an unavailable state and no numeric error or assessment.
-- **SC-004**: Users can select a recent time range and hour and see matching source-pair data in both views.
+- **SC-004**: Users can select a recent time range and hour and see the selected hour in the matrix and all matching source-pair records in the detailed table.
 - **SC-005**: Existing forecast, ranking, and consensus-history workflows continue to return their previous response shapes and behavior.
 
 ## Assumptions

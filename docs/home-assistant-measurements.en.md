@@ -55,7 +55,8 @@ Existing measurements keep their locations. A legacy instance with measurements
 at one valid location can show that location automatically. An instance spanning
 several locations stays in legacy mode rather than silently moving its sensors.
 Pair it only after resolving conflicting mappings; otherwise the change is
-rejected. To use the simplified add-measurement form, pair the instance first.
+rejected. You can still edit a legacy instance's name, URL or token without
+assigning a location. To use the simplified add-measurement form, pair the instance first.
 Environment-managed instances remain read-only in the UI. To pair a named
 environment instance, set its `location_id` in `HAW_HOME_ASSISTANT_INSTANCES`.
 The implicit `environment` instance from URL/token variables continues to use

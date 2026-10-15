@@ -41,3 +41,11 @@ specialist-authored changes.
   hidden markers, visible focus and native keyboard toggling.
 - These are offline fixtures, not a live Home Assistant/Recorder smoke test.
   Firefox and WebKit were not exercised.
+- Coordinator `parallel_validation`: Python CodeQL completed with **0 alerts**.
+  Its automated code-review component was unavailable because the configured
+  model was absent from the registry, despite the wrapper's success label.
+  A separate read-only code-review specialist reviewed the changes and backend
+  follow-ups; its legacy credential-edit finding was fixed as T020.
+  The UI specialist verified name/URL/token editing while retaining two legacy
+  locations, conflict recovery, and required location selection for new instances.
+- Secret scanning found no secrets in the changed source, tests or artifacts.

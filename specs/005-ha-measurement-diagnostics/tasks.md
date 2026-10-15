@@ -61,4 +61,4 @@ Deliver lossless pairing as MVP, then read-only Test and Recorder history, then 
 ## Phase 8: Convergence
 
 - [x] T019 Reject explicit environment measurement locations conflicting with paired instances in app/config.py and cover valid named-environment pairing and multi-location upgrade attribution in tests/test_home_assistant_measurements.py per FR-003, US1/AC2 and Constitution II (partial, HIGH).
-- [ ] T020 Preserve legacy unpaired mode when editing instance credentials in app/static/index.html so multi-location installations can update tokens without incompatible pairing, per FR-002 and US1/AC2 (partial, MEDIUM; code-review finding).
+- [x] T020 Preserve legacy unpaired mode when editing instance credentials in app/static/index.html so multi-location installations can update tokens without incompatible pairing, per FR-002 and US1/AC2 (partial, MEDIUM; code-review finding).

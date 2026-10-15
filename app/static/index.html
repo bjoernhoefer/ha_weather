@@ -386,9 +386,10 @@
       </table>
       <form id="haInstanceForm" class="bar">
         <label>Name <input id="haName" required maxlength="100" placeholder="e.g. Vienna flat" /></label>
-        <label>Location <select id="haLocation" required></select></label>
+        <label>Location <select id="haLocation" required aria-describedby="haInstanceLocationHelp"></select></label>
         <label>URL <input id="haUrl" type="url" maxlength="500" placeholder="http://homeassistant.local:8123" /></label>
         <label>Long-lived token <input id="haToken" type="password" autocomplete="off" maxlength="500" placeholder="token" /></label>
+        <p id="haInstanceLocationHelp" class="muted ha-form-status" hidden>Keep legacy / unpaired locations to update the name or credentials without moving existing measurements. A new pairing must be compatible with their existing locations.</p>
         <div class="bar ha-form-actions">
           <button type="submit" id="haInstanceSubmit">Add instance</button>
           <button type="button" id="haInstanceCancel" hidden>Cancel</button>
@@ -1055,6 +1056,7 @@
       let locations = [];
       let observationSources = null;
       let editingInstance = null;
+      let editingInstanceRecord = null;
       let editingMeasurement = null;
       let editingMeasurementRecord = null;
       let measurementTestRequest = 0;
@@ -1311,34 +1313,34 @@
             if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
               throw new Error("Invalid history window");
             }
-            const points = result.samples.filter((point) =>
-              !point.carried &&
-              typeof point.value === "number" && Number.isFinite(point.value) &&
-              point.timestamp && Number.isFinite(new Date(point.timestamp).getTime()) &&
-              new Date(point.timestamp).getTime() >= start &&
-              new Date(point.timestamp).getTime() <= end
+            const samples = result.samples.filter((sample) =>
+              !sample.carried &&
+              typeof sample.value === "number" && Number.isFinite(sample.value) &&
+              sample.timestamp && Number.isFinite(new Date(sample.timestamp).getTime()) &&
+              new Date(sample.timestamp).getTime() >= start &&
+              new Date(sample.timestamp).getTime() <= end
             );
             const gaps = (Array.isArray(result.gaps) ? result.gaps : []).filter((gap) =>
               gap.timestamp && Number.isFinite(new Date(gap.timestamp).getTime()) &&
               new Date(gap.timestamp).getTime() >= start &&
               new Date(gap.timestamp).getTime() <= end
             );
-            const entries = points.map((point) => ({ ...point, gap: false }))
+            const entries = samples.map((sample) => ({ ...sample, gap: false }))
               .concat(gaps.map((gap) => ({ timestamp: gap.timestamp, gap: true })))
               .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-            entries.forEach((point) => {
+            entries.forEach((entry) => {
               const item = document.createElement("li");
               const time = document.createElement("time");
-              time.dateTime = new Date(point.timestamp).toISOString();
-              time.textContent = diagnosticTime(point.timestamp);
-              item.append(time, document.createTextNode(point.gap
+              time.dateTime = new Date(entry.timestamp).toISOString();
+              time.textContent = diagnosticTime(entry.timestamp);
+              item.append(time, document.createTextNode(entry.gap
                 ? " · Gap — unavailable or unusable state; no value inferred."
-                : ` · ${point.value} °C`));
+                : ` · ${entry.value} °C`));
               list.appendChild(item);
             });
             loaded = true;
-            status.textContent = points.length
-                ? `${points.length} recorded values · UTC. From HA recorder, not the forecast archive. Missing or unavailable periods remain gaps.`
+            status.textContent = samples.length
+                ? `${samples.length} recorded values · UTC. From HA recorder, not the forecast archive. Missing or unavailable periods remain gaps.`
                 : "No usable Celsius values recorded in the last 24 hours.";
             if (gaps.length) status.textContent += ` ${gaps.length} recorded gap(s) shown.`;
             refresh.textContent = "Refresh history";
@@ -1641,10 +1643,20 @@
         } catch (error) { setStatus(error.message); }
       }
 
+      function updateInstanceLocationMode() {
+        const keepLegacy = !!editingInstanceRecord && !instanceLocation(editingInstanceRecord);
+        $("haLocation").required = !keepLegacy;
+        const blank = Array.from($("haLocation").options).find((option) => option.value === "");
+        if (blank) blank.textContent = keepLegacy ? "Keep legacy / unpaired locations" : "Choose a location";
+        $("haInstanceLocationHelp").hidden = !keepLegacy;
+      }
+
       function resetInstanceForm() {
         editingInstance = null;
+        editingInstanceRecord = null;
         $("haInstanceForm").reset();
         $("haLocation").value = "";
+        updateInstanceLocationMode();
         $("haToken").placeholder = "token";
         $("haInstanceSubmit").textContent = "Add instance";
         $("haInstanceCancel").hidden = true;
@@ -1652,8 +1664,10 @@
 
       function startInstanceEdit(instance) {
         editingInstance = instance.id;
+        editingInstanceRecord = { ...instance };
         $("haName").value = instance.name;
         $("haLocation").value = instanceLocation(instance) || "";
+        updateInstanceLocationMode();
         $("haUrl").value = instance.url || "";
         $("haToken").value = "";
         $("haToken").placeholder = instance.token_set ? "keep current token" : "token";
@@ -1665,13 +1679,15 @@
       $("haInstanceCancel").addEventListener("click", resetInstanceForm);
       $("haInstanceForm").addEventListener("submit", async (event) => {
         event.preventDefault();
+        if (!$("haInstanceForm").reportValidity()) return;
         const submittedInstance = editingInstance;
+        const submittedLocation = $("haLocation").value;
         const payload = {
           name: $("haName").value.trim(),
-          location_id: $("haLocation").value,
           url: $("haUrl").value.trim() || null,
           token: $("haToken").value.trim() || null,
         };
+        if (submittedLocation) payload.location_id = submittedLocation;
         try {
           const path = editingInstance
             ? `/api/observation-sources/home-assistant/instances/${encodeURIComponent(editingInstance)}`
@@ -1684,7 +1700,7 @@
           setStatus(`Home Assistant instance ${payload.name} ${submittedInstance ? "saved" : "added"}.`);
           if (editingInstance === submittedInstance &&
               $("haName").value.trim() === payload.name &&
-              $("haLocation").value === payload.location_id &&
+              $("haLocation").value === submittedLocation &&
               ($("haUrl").value.trim() || null) === payload.url &&
               ($("haToken").value.trim() || null) === payload.token) resetInstanceForm();
         } catch (error) { setStatus(error.message); }
@@ -1868,6 +1884,7 @@
         const options = items.map((location) => [location.id, location.name]);
         fillSelect(select, options);
         fillSelect($("haLocation"), [["", "Choose a location"], ...options]);
+        updateInstanceLocationMode();
         fillSelect($("esMeasurementLocation"), options);
         if (preferred && items.some((item) => item.id === preferred)) select.value = preferred;
         renderLocations();
@@ -2198,6 +2215,7 @@
           const options = items.map((location) => [location.id, location.name]);
           fillSelect($("location"), options);
           fillSelect($("haLocation"), [["", "Choose a location"], ...options]);
+          updateInstanceLocationMode();
           fillSelect($("esMeasurementLocation"), options);
           $("esMeasurementLocation").value = $("location").value;
           renderLocations();

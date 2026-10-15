@@ -59,7 +59,8 @@ Messungen an genau einem gültigen Standort kann diesen automatisch anzeigen.
 Eine Instanz mit mehreren Standorten bleibt im Legacy-Modus, statt ihre Sensoren
 unbemerkt zu verschieben. Löse widersprüchliche Zuordnungen vor einer
 Standortkopplung auf; andernfalls wird die Änderung abgelehnt. Für das
-vereinfachte Formular zum Hinzufügen von Messungen muss die Instanz zuerst einem
+Ändern von Name, URL oder Token einer Legacy-Instanz ist keine Standortkopplung
+erforderlich. Für das vereinfachte Formular zum Hinzufügen von Messungen muss die Instanz zuerst einem
 Standort zugeordnet sein. Umgebungsverwaltete Instanzen bleiben im UI
 schreibgeschützt. Für eine benannte Umgebungsinstanz wird `location_id` in
 `HAW_HOME_ASSISTANT_INSTANCES` gesetzt. Die implizite Instanz `environment` aus

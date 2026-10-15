@@ -1223,6 +1223,62 @@ def test_source_comparison_validates_period_and_location(api):
     assert len(api.get("/api/source-comparison/vienna?hours=48").json()["hours"]) == 48
 
 
+def test_source_comparison_does_not_rate_partial_pairs(api, service):
+    from app.clock import now_utc
+
+    end = now_utc().replace(minute=0, second=0, microsecond=0)
+    target = end - timedelta(hours=1)
+    previous = target - timedelta(hours=1)
+    service.storage.save_provider_hourly_forecasts(
+        [
+            ProviderForecast(
+                provider="open_meteo",
+                location_id="vienna",
+                issued_at=previous - timedelta(hours=5),
+                hours=[
+                    HourlyForecast(target_time=previous, temperature=9.0),
+                    HourlyForecast(target_time=target, temperature=10.0),
+                ],
+            )
+        ]
+    )
+    service.storage.save_hourly_measurements(
+        [
+            HourlyMeasurement(
+                location_id="vienna",
+                target_time=target,
+                source_id="home:sensor.measured",
+                instance_id="home",
+                entity_id="sensor.measured",
+                source_name="Home / Measured",
+                temperature=12.0,
+            ),
+            HourlyMeasurement(
+                location_id="vienna",
+                target_time=previous,
+                source_id="home:sensor.unavailable",
+                instance_id="home",
+                entity_id="sensor.unavailable",
+                source_name="Home / Unavailable",
+                temperature=8.0,
+            ),
+        ]
+    )
+
+    payload = api.get("/api/source-comparison/vienna?hours=24").json()
+    selected = next(
+        hour
+        for hour in payload["hours"]
+        if hour["target_time"] == target.isoformat().replace("+00:00", "Z")
+    )
+    pairs = {item["source_id"]: item for item in selected["comparisons"]}
+    assert pairs["home:sensor.measured"]["temperature_error"] == -2.0
+    assert pairs["home:sensor.unavailable"]["forecast_temperature"] == 10.0
+    assert pairs["home:sensor.unavailable"]["measured_temperature"] is None
+    assert pairs["home:sensor.unavailable"]["temperature_error"] is None
+    assert pairs["home:sensor.unavailable"]["assessment"] is None
+
+
 def test_source_comparison_fetches_each_configured_outdoor_sensor(api, service):
     from app.clock import now_utc
     from app.config import HomeAssistantInstance, Measurement
@@ -1247,6 +1303,7 @@ def test_source_comparison_fetches_each_configured_outdoor_sensor(api, service):
         for entity_id, scope, name in (
             ("sensor.garden", "outdoor", "Garden"),
             ("sensor.porch", "outdoor", "Porch"),
+            ("sensor.terrace", "outdoor", "Terrace"),
             ("sensor.living_room", "indoor", "Living room"),
         )
     ]
@@ -1259,7 +1316,13 @@ def test_source_comparison_fetches_each_configured_outdoor_sensor(api, service):
                 location_id="vienna",
                 issued_at=target - timedelta(hours=5),
                 hours=[HourlyForecast(target_time=target, temperature=20.0)],
-            )
+            ),
+            ProviderForecast(
+                provider="met_no",
+                location_id="vienna",
+                issued_at=target - timedelta(hours=5),
+                hours=[HourlyForecast(target_time=target, temperature=19.0)],
+            ),
         ]
     )
 
@@ -1267,16 +1330,25 @@ def test_source_comparison_fetches_each_configured_outdoor_sensor(api, service):
     assert {source["id"] for source in payload["sources"]} == {
         "home:sensor.garden",
         "home:sensor.porch",
+        "home:sensor.terrace",
     }
     selected = next(
         hour
         for hour in payload["hours"]
         if hour["target_time"] == target.isoformat().replace("+00:00", "Z")
     )
+    assert len(selected["comparisons"]) == 6
     assert {
-        item["source_id"]: item["measured_temperature"]
+        (item["provider"], item["source_id"])
         for item in selected["comparisons"]
-    } == {"home:sensor.garden": 18.5, "home:sensor.porch": 18.5}
+    } == {
+        (provider, f"home:sensor.{sensor}")
+        for provider in ("met_no", "open_meteo")
+        for sensor in ("garden", "porch", "terrace")
+    }
+    assert all(
+        item["measured_temperature"] == 18.5 for item in selected["comparisons"]
+    )
     assert service.storage.hourly_measurements(
         "vienna", target, target + timedelta(hours=1)
     )

@@ -61,15 +61,15 @@ No shared infrastructure tasks are required. Existing storage initialization, au
 - [X] T014 [US2] Document the independent hourly comparison, Celsius requirement, error interpretation, retention, missing data, and source setup in `docs/home-assistant-measurements.de.md`.
 - [X] T015 [US2] Keep the English Home Assistant measurement guide aligned with the feature scope and setup semantics in `docs/home-assistant-measurements.en.md`.
 - [X] T016 [US2] Update the user-facing API/history overview to distinguish provider-specific hourly comparisons from consensus history in `README.md`.
-- [ ] T017 [US2] Verify paired documentation consistency, responsive narrow-screen presentation, keyboard operation, and the 24/48/72-hour quickstart in `specs/004-hourly-source-comparison/quickstart.md`.
+- [X] T017 [US2] Verify paired documentation consistency, responsive narrow-screen presentation, keyboard operation, and the 24/48/72-hour quickstart in `specs/004-hourly-source-comparison/quickstart.md`.
 
 **Checkpoint**: Users can select a bounded recent period and inspect a clear, usable matrix and detail table on desktop and mobile.
 
 ## Phase 5: Polish & Cross-Cutting Concerns
 
-- [ ] T018 [P] Run the complete `pytest -q` suite using `pytest.ini` and record the result.
-- [ ] T019 Review API and persisted-data behavior against `specs/004-hourly-source-comparison/contracts/source-comparison.md` and `specs/004-hourly-source-comparison/data-model.md`.
-- [ ] T020 Scan changed source, test, and documentation files for secrets before the final commit.
+- [X] T018 [P] Run the complete `.venv/bin/pytest -q` suite using `pytest.ini` and record the result.
+- [X] T019 Review API and persisted-data behavior against `specs/004-hourly-source-comparison/contracts/source-comparison.md` and `specs/004-hourly-source-comparison/data-model.md`.
+- [X] T020 Scan changed source, test, and documentation files for secrets before the final commit.
 
 ## Dependencies & Execution Order
 

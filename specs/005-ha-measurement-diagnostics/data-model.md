@@ -9,6 +9,9 @@ Existing ID, name, URL and write-only token gain nullable `location_id`. The loc
 Retain persisted ID, instance ID, effective location, entity ID, scope and name. Input location becomes optional for paired instances and must match if supplied. Unpaired legacy inputs still need an explicit location. Existing uniqueness and per-location/scope limits apply.
 
 Pairing changes cannot silently move existing measurements or relabel historical observations. Deleting locations must not leave a dangling instance pairing.
+Explicit environment pairings are checked against both configured and stored
+measurements before ingestion; incompatible configuration prevents startup
+with credential-safe errors. Unpaired legacy mappings remain supported.
 
 ## Diagnostic result
 

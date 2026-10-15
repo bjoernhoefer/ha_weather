@@ -188,6 +188,19 @@ def effective_measurements(settings: Settings) -> List[Measurement]:
                     )
                 )
     measurements.extend(settings.home_assistant_measurements)
+    instances = effective_instances(settings)
+    for measurement in measurements:
+        instance = instances.get(measurement.instance_id)
+        if (
+            instance is not None
+            and instance.location_id is not None
+            and measurement.location_id != instance.location_id
+        ):
+            # Settings copies also include SQLite records; reject conflicts
+            # rather than routing a paired installation's sensor elsewhere.
+            raise ValueError(
+                "Home Assistant measurement location conflicts with explicitly paired instance"
+            )
     return measurements
 
 

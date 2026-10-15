@@ -1,11 +1,13 @@
 """Offline cross-layer tests for pairing, live states and recorder history."""
 
 from datetime import datetime, timedelta, timezone
+import json
 import sqlite3
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app.config import HomeAssistantInstance, Measurement, Settings
 from app.main import create_app
@@ -327,6 +329,29 @@ def test_old_unpaired_clients_keep_explicit_location(probe):
     assert api.put(f"{ROOT}/instances/home", json={"name": "Home", "location_id": "vienna"}).status_code == 409
 
 
+def test_legacy_put_same_instance_and_location_allows_name_scope_entity_edits(probe):
+    api, service, _, _ = probe
+    instance = service.storage.ha_instances()[0]
+    service.storage.save_ha_instance(instance.model_copy(update={"location_id": None}))
+    response = api.post(f"{ROOT}/measurements", json={**BODY, "location_id": "vienna"})
+    assert response.status_code == 201
+    original = service.storage.measurements()[0]
+    edited = {
+        **BODY, "location_id": "vienna", "name": "Renamed legacy sensor",
+        "scope": "indoor", "entity_id": "sensor.replacement",
+    }
+    response = api.put(f"{ROOT}/measurements/{original.id}", json=edited)
+    assert response.status_code == 200, response.text
+    saved = service.storage.measurements()[0]
+    assert saved.id == original.id
+    assert saved.instance_id == original.instance_id
+    assert saved.location_id == original.location_id
+    assert saved.name == edited["name"]
+    assert saved.scope == edited["scope"]
+    assert saved.entity_id == edited["entity_id"]
+    assert service.storage.ha_instances()[0].location_id is None
+
+
 def test_pairing_changes_cannot_silently_move_existing_measurements(probe):
     api, service, _, _ = probe
     api.post(f"{ROOT}/measurements", json=BODY)
@@ -398,7 +423,10 @@ def test_probes_validate_instance_location_and_url_without_requests(probe, actio
     assert requests == []
 
 
-@pytest.mark.parametrize("locations,expected", [(["vienna"], "vienna"), (["vienna", "other"], None), (["missing"], None)])
+@pytest.mark.parametrize("locations,expected", [
+    (["vienna"], "vienna"), (["other"], "other"),
+    (["vienna", "other"], None), (["missing"], None),
+])
 def test_old_database_additive_migration_infers_only_safe_unique_pairing(tmp_path, locations, expected):
     path = str(tmp_path / "legacy.sqlite3")
     with sqlite3.connect(path) as connection:
@@ -410,19 +438,65 @@ def test_old_database_additive_migration_infers_only_safe_unique_pairing(tmp_pat
                 scope TEXT NOT NULL DEFAULT 'outdoor', name TEXT NOT NULL DEFAULT '',
                 UNIQUE(instance_id, location_id, entity_id, scope));
             INSERT INTO ha_instances VALUES ('home', 'Home', 'http://ha.invalid', 'test-only-token');
+            CREATE TABLE hourly_measurements (
+                location_id TEXT NOT NULL, target_time TEXT NOT NULL,
+                source_id TEXT NOT NULL, instance_id TEXT NOT NULL,
+                entity_id TEXT NOT NULL, source_name TEXT NOT NULL,
+                temperature REAL NOT NULL,
+                PRIMARY KEY(location_id, source_id, target_time));
+            CREATE TABLE observations (
+                location_id TEXT NOT NULL, target_date TEXT NOT NULL,
+                scope TEXT NOT NULL DEFAULT 'outdoor', temperature_min REAL,
+                temperature_max REAL, precipitation_mm REAL, source TEXT,
+                PRIMARY KEY(location_id, target_date, scope));
         """)
         for location in locations:
             connection.execute(
                 "INSERT INTO measurements(instance_id, location_id, entity_id) VALUES ('home', ?, 'sensor.temperature')",
                 (location,),
             )
+            connection.execute(
+                "INSERT INTO hourly_measurements VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (location, NOW.isoformat(), "home:sensor.temperature", "home",
+                 "sensor.temperature", "Original installation", 7.5),
+            )
+            connection.execute(
+                "INSERT INTO observations VALUES (?, ?, 'outdoor', 7.5, 12.5, NULL, 'home_assistant')",
+                (location, NOW.date().isoformat()),
+            )
+        original_ids = {
+            row[1]: row[0]
+            for row in connection.execute("SELECT id, location_id FROM measurements")
+        }
     settings = Settings(database_path=path, locations=[VIENNA], deployment_mode="local")
     for restart in range(2):
         store = Storage(path)
-        WeatherService(settings, store)
+        if restart == 0:
+            store.save_location(VIENNA.model_copy(update={"id": "other", "name": "Persisted UI location"}))
+        service = WeatherService(settings, store)
+        assert service.location("other").name == "Persisted UI location"
+        assert service.location("vienna").name == "Vienna"
         assert store.ha_instances()[0].location_id == expected
         assert [m.location_id for m in store.measurements()] == sorted(locations)
+        assert {m.location_id: m.id for m in store.measurements()} == original_ids
+        assert all(m.instance_id == "home" and m.entity_id == "sensor.temperature" for m in store.measurements())
         assert store.ha_instances()[0].token == "test-only-token"
+        for location in locations:
+            (archived,) = store.hourly_measurements(
+                location, NOW - timedelta(hours=1), NOW + timedelta(hours=1)
+            )
+            assert archived.location_id == location
+            assert archived.instance_id == "home"
+            assert archived.source_id == "home:sensor.temperature"
+            assert archived.entity_id == "sensor.temperature"
+            assert archived.source_name == "Original installation"
+            assert archived.temperature == 7.5
+            assert archived.target_time == NOW
+            observation = store.observations(location)[NOW.date()]
+            assert observation.location_id == location
+            assert observation.source == "home_assistant"
+            assert observation.temperature_min == 7.5
+            assert observation.temperature_max == 12.5
         store.close()
 
 
@@ -486,3 +560,135 @@ def test_environment_instance_measurement_can_be_probed(probe):
     })
     assert response.status_code == 200
     assert response.json()["instance_id"] == "environment"
+
+
+def test_named_environment_pairing_derives_location_and_rejects_conflicting_api_mapping(probe):
+    api, service, _, requests = probe
+    configured = HomeAssistantInstance(
+        id="named_environment", name="Named environment installation",
+        url="http://ha.invalid", token="environment-test-token", location_id="other",
+    )
+    environment_mapping = Measurement(
+        instance_id=configured.id, location_id="other", entity_id="sensor.existing",
+        name="Original environment mapping",
+    )
+    service.settings = service.settings.model_copy(update={
+        "home_assistant_instances": [configured],
+        "home_assistant_measurements": [environment_mapping],
+    })
+    response = api.post(f"{ROOT}/measurements", json={**BODY, "instance_id": configured.id})
+    assert response.status_code == 201, response.text
+    (saved,) = service.storage.measurements()
+    assert saved.instance_id == configured.id
+    assert saved.location_id == "other"
+    status = response.json()["home_assistant"]
+    environment_instance = next(i for i in status["instances"] if i["id"] == configured.id)
+    assert environment_instance["origin"] == "environment"
+    assert environment_instance["location_id"] == "other"
+    environment_record = next(m for m in status["measurements"] if m["origin"] == "environment")
+    assert environment_record["id"] is None
+    assert environment_record["location_id"] == "other"
+    original_records = service.storage.measurements()
+    original_locations = service.storage.locations()
+    original_settings = service.settings.model_dump()
+    for operation in ["/test", "/history", ""]:
+        response = api.post(
+            f"{ROOT}/measurements{operation}",
+            json={**environment_record, "location_id": "vienna"},
+        )
+        assert response.status_code == 409, response.text
+    assert requests == []
+    assert api.delete("/api/locations/other").status_code == 409
+    assert service.storage.measurements() == original_records
+    assert service.storage.locations() == original_locations
+    assert service.settings.model_dump() == original_settings
+    assert service.settings.home_assistant_measurements[0] == environment_mapping
+    # Valid paired diagnostics may omit a location even for read-only instances.
+    response = api.post(f"{ROOT}/measurements/test", json={**BODY, "instance_id": configured.id})
+    assert response.status_code == 200
+    assert response.json()["usable"] is True
+    assert response.json()["location_id"] == "other"
+    assert service.storage.measurements() == original_records
+
+
+def test_explicit_paired_environment_config_rejects_mismatched_measurement_safely(monkeypatch):
+    monkeypatch.setenv("HAW_HOME_ASSISTANT_INSTANCES", json.dumps([{
+        "id": "named_environment", "name": "Private installation",
+        "url": "http://private.invalid", "token": "private-test-credential",
+        "location_id": "vienna",
+    }]))
+    monkeypatch.setenv("HAW_HOME_ASSISTANT_MEASUREMENTS", json.dumps([{
+        "instance_id": "named_environment", "location_id": "other",
+        "entity_id": "sensor.private_entity",
+    }]))
+    with pytest.raises(ValidationError) as caught:
+        Settings(_env_file=None)
+    message = str(caught.value)
+    assert "measurement location conflicts with explicitly paired instance" in message
+    for private_value in ["private-test-credential", "private.invalid", "sensor.private_entity"]:
+        assert private_value not in message
+
+
+def test_legacy_unpaired_environment_config_keeps_valid_multi_location_mappings(monkeypatch):
+    monkeypatch.setenv("HAW_HOME_ASSISTANT_INSTANCES", json.dumps([{
+        "id": "named_environment", "name": "Legacy installation",
+        "url": "http://ha.invalid", "token": "test-only-token",
+    }]))
+    mappings = [
+        {"instance_id": "named_environment", "location_id": location, "entity_id": BODY["entity_id"]}
+        for location in ["vienna", "other"]
+    ]
+    monkeypatch.setenv("HAW_HOME_ASSISTANT_MEASUREMENTS", json.dumps(mappings))
+    settings = Settings(
+        _env_file=None,
+        locations=[VIENNA, VIENNA.model_copy(update={"id": "other", "name": "Other"})],
+    )
+    assert settings.home_assistant_instances[0].location_id is None
+    assert [m.model_dump(exclude_defaults=True) for m in home_assistant.effective_measurements(settings)] == mappings
+
+
+def test_paired_environment_config_accepts_matching_explicit_measurement(monkeypatch):
+    monkeypatch.setenv("HAW_HOME_ASSISTANT_INSTANCES", json.dumps([{
+        "id": "named_environment", "name": "Paired installation", "location_id": "vienna",
+    }]))
+    monkeypatch.setenv("HAW_HOME_ASSISTANT_MEASUREMENTS", json.dumps([{
+        "instance_id": "named_environment", "location_id": "vienna", "entity_id": BODY["entity_id"],
+    }]))
+    settings = Settings(_env_file=None)
+    assert home_assistant.effective_measurements(settings)[0].location_id == "vienna"
+
+
+def test_pipeline_rejects_conflicting_pairing_even_if_settings_copy_bypasses_validation(settings):
+    settings = settings.model_copy(update={
+        "home_assistant_instances": [HomeAssistantInstance(
+            id="named_environment", name="Paired", location_id="vienna",
+        )],
+        "home_assistant_measurements": [Measurement(
+            instance_id="named_environment", location_id="other", entity_id=BODY["entity_id"],
+        )],
+    })
+    with pytest.raises(ValueError, match="measurement location conflicts with explicitly paired instance"):
+        home_assistant.effective_measurements(settings)
+
+
+def test_environment_pairing_change_rejects_incompatible_persisted_mapping_without_relabeling(tmp_path):
+    path = str(tmp_path / "changed-environment.sqlite3")
+    store = Storage(path)
+    original = Measurement(
+        instance_id="named_environment", location_id="vienna", entity_id=BODY["entity_id"],
+    )
+    measurement_id = store.add_measurement(original)
+    before = store.measurements()
+    settings = Settings(
+        database_path=path, locations=[VIENNA],
+        home_assistant_instances=[HomeAssistantInstance(
+            id="named_environment", name="Changed environment pairing", location_id="other",
+        )],
+    )
+    with pytest.raises(ValueError, match="measurement location conflicts with explicitly paired instance"):
+        WeatherService(settings, store)
+    assert store.measurements() == before
+    assert store.measurements()[0].id == measurement_id
+    assert store.measurements()[0].location_id == "vienna"
+    assert store.measurements()[0].instance_id == "named_environment"
+    store.close()

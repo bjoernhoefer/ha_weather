@@ -8,6 +8,11 @@
 
 **Alternatives considered**: Automatically split installations or move sensors; rejected because either duplicates credentials or silently changes data meaning.
 
+Explicit environment pairings are validated against configured and persisted
+measurements before ingestion. Conflicting startup configuration is rejected,
+not silently remapped; validation error displays hide input values. Legacy
+unpaired multi-location configurations remain valid.
+
 ## Diagnostic provenance
 
 **Decision**: Request exact current state for Test and source recorder history for recent values. Neither changes stored configuration, scoring or archives.

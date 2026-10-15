@@ -41,6 +41,8 @@ and missing or unusable records are not invented. This is source Recorder
 history, **not an audit of values previously delivered to ha_weather**. Recorder
 must record this entity and retain data for the requested period; a successful current-state test does not guarantee
 recorded history. An empty result can therefore be valid.
+Timestamped gaps indicate unusable recorded states, not failed deliveries.
+Pre-window states are omitted and gaps are not interpolated.
 This per-sensor history is separate from the dashboard's overall **History**
 and **Hourly source comparison** sections.
 
@@ -60,6 +62,9 @@ The implicit `environment` instance from URL/token variables continues to use
 its legacy per-location mappings. Existing multi-location measurements remain
 usable without pairing; use the API with explicit locations to manage legacy
 mappings, or configure separate named instances for the simplified UI workflow.
+Explicit environment pairings that conflict with configured or persisted
+measurement locations prevent startup until corrected; no sensors are silently
+reassigned.
 
 Older API clients may still supply an explicit measurement location for unpaired
 instances. For a paired instance, omit it or supply the same location; a

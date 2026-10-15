@@ -6,7 +6,7 @@ import json
 from functools import lru_cache
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: default Elasticsearch term field used to select a location's documents;
@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     """Runtime settings, all overridable through environment variables."""
 
     model_config = SettingsConfigDict(
-        env_prefix="HAW_", env_file=".env", extra="ignore"
+        env_prefix="HAW_", env_file=".env", extra="ignore", hide_input_in_errors=True
     )
 
     # --- runtime -------------------------------------------------------
@@ -236,6 +236,29 @@ class Settings(BaseSettings):
         if normalized not in {"local", "public"}:
             raise ValueError("deployment_mode must be 'local' or 'public'")
         return normalized
+
+    @model_validator(mode="after")
+    def _validate_home_assistant_pairings(self) -> "Settings":
+        instances: Dict[str, HomeAssistantInstance] = {}
+        for instance in self.home_assistant_instances:
+            # The implicit environment installation takes precedence over
+            # additional entries with its reserved ID and remains unpaired.
+            if instance.id == ENVIRONMENT_INSTANCE_ID and (
+                self.home_assistant_url or self.home_assistant_token
+            ):
+                continue
+            instances.setdefault(instance.id, instance)
+        for measurement in self.home_assistant_measurements:
+            instance = instances.get(measurement.instance_id)
+            if (
+                instance is not None
+                and instance.location_id is not None
+                and measurement.location_id != instance.location_id
+            ):
+                raise ValueError(
+                    "Home Assistant measurement location conflicts with explicitly paired instance"
+                )
+        return self
 
     @property
     def auth_required(self) -> bool:

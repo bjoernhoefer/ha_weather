@@ -43,6 +43,9 @@ nicht erfunden. Dies ist die Recorder-Historie der Quelle, **kein Protokoll der
 bereits an ha_weather gelieferten Werte**. Der Recorder muss die Entity
 aufzeichnen und Daten für den angefragten Zeitraum aufbewahren; ein erfolgreicher Test des aktuellen Zustands garantiert keine
 Historie. Ein leeres Ergebnis kann daher korrekt sein.
+Zeitlich markierte Lücken kennzeichnen unbrauchbare aufgezeichnete Zustände,
+keine fehlgeschlagenen Lieferungen. Zustände vor dem Zeitfenster entfallen;
+Lücken werden nicht interpoliert.
 Diese Sensorhistorie ist von den allgemeinen Dashboard-Abschnitten **History**
 und **Hourly source comparison** getrennt.
 
@@ -64,6 +67,9 @@ den URL-/Token-Variablen verwendet weiterhin ihre bisherigen Standortzuordnungen
 Vorhandene Messungen mit mehreren Standorten bleiben ohne Kopplung nutzbar.
 Verwalte solche Legacy-Zuordnungen über die API mit explizitem Standort oder
 konfiguriere getrennte benannte Instanzen für den vereinfachten UI-Ablauf.
+Widerspricht eine explizite Umgebungskopplung den konfigurierten oder
+gespeicherten Messungsstandorten, startet der Dienst erst nach Korrektur;
+Sensoren werden nicht unbemerkt neu zugeordnet.
 
 Ältere API-Clients dürfen für nicht gekoppelte Instanzen weiterhin einen
 Messungsstandort übergeben. Bei gekoppelten Instanzen entfällt er oder muss dem

@@ -195,6 +195,8 @@ Two additional, pluggable sources can be enabled through
   supported without silently moving sensors. Conflicting pairing changes are
   rejected. Maintain the
   list in the UI (add, edit, delete) or via `HAW_HOME_ASSISTANT_MEASUREMENTS`.
+  Explicit environment pairings conflicting with configured or persisted
+  measurement locations are rejected at startup until corrected.
   Each day's minimum/maximum sensor state becomes one observation; adding a
   measurement in the UI enables the `home_assistant` source automatically.
   **Test** checks the selected sensor's current finite Celsius temperature
@@ -261,7 +263,7 @@ others or the forecast refresh.
 | `POST /api/observation-sources/home-assistant/measurements` | add a measurement `{"instance_id": "garden", "entity_id": "sensor.outdoor", "scope": "outdoor", "name": ""}`; location is inherited; legacy unpaired instances require explicit `location_id`, paired instances reject mismatches |
 | `PUT /api/observation-sources/home-assistant/measurements/{id}` | update a measurement |
 | `DELETE /api/observation-sources/home-assistant/measurements/{id}` | remove a measurement |
-| `POST /api/observation-sources/home-assistant/measurements/test` | read-only current-state usability test using the measurement input, including unsaved/environment sensors |
+| `POST /api/observation-sources/home-assistant/measurements/test` | read-only current-state test using measurement input, including unsaved/environment sensors; inspect `usable`/`reason` even for HTTP 200 |
 | `POST /api/observation-sources/home-assistant/measurements/history` | read-only rolling 24-hour Recorder history using the measurement input; timestamped Celsius samples, not a local delivery audit |
 | `POST /api/observation-sources/elasticsearch/instances` | add an Elasticsearch instance `{"name": "Elastic Cloud", "url": "https://...", "api_key": "...", "index": "weather", "location_field": "location_id"}` |
 | `PUT /api/observation-sources/elasticsearch/instances/{id}` | update an instance; an empty API key keeps the stored one |

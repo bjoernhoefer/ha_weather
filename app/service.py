@@ -165,6 +165,9 @@ class WeatherService:
             self._infer_legacy_ha_pairings()
             self.storage.ha_pairing_migration_pending = False
         self._migrate_legacy_elasticsearch()
+        # Detect environment pairing changes incompatible with persisted rows
+        # before any source can ingest them. Never rewrite archived attribution.
+        effective_measurements(self.observation_settings())
         self.reload_providers()
 
     def _default_client(self) -> httpx.AsyncClient:

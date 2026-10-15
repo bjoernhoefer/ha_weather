@@ -1165,7 +1165,7 @@
 
       function instanceLocation(instance, ha = observationSources?.home_assistant) {
         if (!instance) return null;
-        if (instance.location_id) return instance.location_id;
+        if (Object.hasOwn(instance, "location_id")) return instance.location_id || null;
         const oldLocations = new Set((ha?.measurements || [])
           .filter((item) => item.instance_id === instance.id && item.location_id)
           .map((item) => item.location_id));
@@ -1197,11 +1197,11 @@
           locations.some((location) => location.id === retained);
         const locationText = retained
           ? `Location: ${locationName(retained)} — existing measurement location retained.` +
-            (mismatch ? " This instance is paired elsewhere. Saving is blocked; test and history retain the original location."
+            (mismatch ? " This instance is paired elsewhere. Choose an instance paired to this original location before saving or testing."
               : !pairedLocation
                 ? unchangedLegacyPair
                   ? " This legacy record keeps its original instance and location. Pair the instance before adding new measurements."
-                  : " Pair the instance before saving. Saved records can still be tested or viewed below."
+                  : " Pair the selected instance before saving or testing; the original location is unchanged."
                 : "")
           : pairedLocation
             ? `Location: ${locationName(pairedLocation)} — inherited from the instance.`
@@ -1210,7 +1210,8 @@
           $("measurementLocation").textContent = locationText;
         }
         $("measurementSubmit").disabled = !payload.instance_id || (!pairedLocation && !unchangedLegacyPair) || !!mismatch;
-        $("measurementTest").disabled = !payload.instance_id || !payload.location_id;
+        $("measurementTest").disabled = !payload.instance_id || !payload.location_id ||
+          !!mismatch || (!pairedLocation && !unchangedLegacyPair);
       }
 
       function invalidateMeasurementTest() {
@@ -1234,14 +1235,31 @@
             method: "POST", body: JSON.stringify(payload),
           });
           if (!isCurrent()) return;
-          status.textContent = typeof result.value === "number" && Number.isFinite(result.value)
-            ? `Current state: ${result.value} °C · ${diagnosticTime(result.last_updated || result.last_changed)}`
-            : "No usable Celsius temperature is available. Check the entity state and temperature unit.";
+          const timestamp = result.last_updated || result.last_changed;
+          const validTime = timestamp && Number.isFinite(new Date(timestamp).getTime());
+          status.textContent = result.usable === true && typeof result.value === "number" && Number.isFinite(result.value) && validTime
+            ? `Current state: ${result.value} °C · ${diagnosticTime(timestamp)}`
+            : measurementUsabilityReason(result.usable === true && !validTime ? "invalid_timestamp" : result.reason);
         } catch (error) {
           if (isCurrent()) status.textContent = diagnosticFailure(error, false);
         } finally {
           if (isCurrent()) trigger.disabled = false;
         }
+      }
+
+      function measurementUsabilityReason(reason) {
+        const reasons = {
+          invalid_state: "The entity is unavailable or has no usable state yet.",
+          not_sensor: "This entity is not a sensor.",
+          not_temperature: "This entity is not a temperature sensor.",
+          not_celsius: "The temperature sensor must report Celsius (°C).",
+          not_numeric: "The entity does not currently report a numeric temperature.",
+          entity_not_found: "The entity was not found. Check its ID or search again.",
+          invalid_timestamp: "The entity has no usable observation timestamp.",
+        };
+        return typeof reason === "string" && Object.hasOwn(reasons, reason)
+          ? reasons[reason]
+          : "No usable Celsius temperature is available. Check the entity state and temperature unit.";
       }
 
       function diagnosticFailure(error, history) {
@@ -1288,24 +1306,41 @@
             });
             if (!details.isConnected || current !== request) return;
             if (!Array.isArray(result.samples)) throw new Error("Invalid history response");
+            const start = new Date(result.start).getTime();
+            const end = new Date(result.end).getTime();
+            if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+              throw new Error("Invalid history window");
+            }
             const points = result.samples.filter((point) =>
+              !point.carried &&
               typeof point.value === "number" && Number.isFinite(point.value) &&
-              point.timestamp && Number.isFinite(new Date(point.timestamp).getTime())
+              point.timestamp && Number.isFinite(new Date(point.timestamp).getTime()) &&
+              new Date(point.timestamp).getTime() >= start &&
+              new Date(point.timestamp).getTime() <= end
             );
-            points.forEach((point) => {
+            const gaps = (Array.isArray(result.gaps) ? result.gaps : []).filter((gap) =>
+              gap.timestamp && Number.isFinite(new Date(gap.timestamp).getTime()) &&
+              new Date(gap.timestamp).getTime() >= start &&
+              new Date(gap.timestamp).getTime() <= end
+            );
+            const entries = points.map((point) => ({ ...point, gap: false }))
+              .concat(gaps.map((gap) => ({ timestamp: gap.timestamp, gap: true })))
+              .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+            entries.forEach((point) => {
               const item = document.createElement("li");
               const time = document.createElement("time");
               time.dateTime = new Date(point.timestamp).toISOString();
               time.textContent = diagnosticTime(point.timestamp);
-              item.append(time, document.createTextNode(
-                ` · ${point.value} °C${point.carried ? " (prior state carried to window start)" : ""}`
-              ));
+              item.append(time, document.createTextNode(point.gap
+                ? " · Gap — unavailable or unusable state; no value inferred."
+                : ` · ${point.value} °C`));
               list.appendChild(item);
             });
             loaded = true;
             status.textContent = points.length
                 ? `${points.length} recorded values · UTC. From HA recorder, not the forecast archive. Missing or unavailable periods remain gaps.`
                 : "No usable Celsius values recorded in the last 24 hours.";
+            if (gaps.length) status.textContent += ` ${gaps.length} recorded gap(s) shown.`;
             refresh.textContent = "Refresh history";
           } catch (error) {
             if (!details.isConnected || current !== request) return;

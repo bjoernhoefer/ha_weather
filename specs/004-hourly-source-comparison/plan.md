@@ -1,129 +1,107 @@
-# Implementation Plan: [FEATURE]
+# Implementation Plan: Hourly Source Comparison
 
-**Branch**: `[###-feature-name]` | **Date**: [DATE] | **Spec**: [link]
+**Branch**: `004-hourly-source-comparison` | **Date**: 2026-10-15 | **Spec**: [spec.md](spec.md)
 
-**Input**: Feature specification from `/specs/[###-feature-name]/spec.md`
-
-**Note**: This template is filled in by the `/speckit-plan` command; its definition describes the execution workflow.
+**Input**: Feature specification in `specs/004-hourly-source-comparison/spec.md`
 
 ## Summary
 
-[Extract from feature spec: primary requirement + technical approach from research]
+Compare separately archived hourly forecasts from each weather provider with hourly readings from each configured outdoor Home Assistant temperature sensor. Keep source identities distinct, match in UTC, display local times using the location timezone, and retain up to 72 hours without changing existing consensus history or daily ranking behavior.
 
 ## Technical Context
 
-<!--
-  ACTION REQUIRED: Replace the content in this section with the technical details
-  for the project. The structure here is presented in advisory capacity to guide
-  the iteration process.
--->
+**Language/Version**: Python 3.11+
 
-**Language/Version**: [e.g., Python 3.11, Swift 5.9, Rust 1.75 or NEEDS CLARIFICATION]
+**Primary Dependencies**: Existing FastAPI, Pydantic, httpx, SQLite, static HTML/CSS/JavaScript
 
-**Primary Dependencies**: [e.g., FastAPI, UIKit, LLVM or NEEDS CLARIFICATION]
+**Storage**: SQLite; additive hourly provider forecast and hourly Home Assistant measurement tables
 
-**Storage**: [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
+**Testing**: pytest, including existing offline HTTP mocks
 
-**Testing**: [e.g., pytest, XCTest, cargo test or NEEDS CLARIFICATION]
+**Target Platform**: Existing Python web service and responsive browser UI
 
-**Target Platform**: [e.g., Linux server, iOS 15+, WASM or NEEDS CLARIFICATION]
+**Project Type**: FastAPI web service with static web UI
 
-**Project Type**: [e.g., library/cli/web-service/mobile-app/compiler/desktop-app or NEEDS CLARIFICATION]
+**Performance Goals**: A 24/48/72-hour comparison uses bounded archived rows and at most one Home Assistant history request per configured outdoor sensor.
 
-**Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps or NEEDS CLARIFICATION]
+**Constraints**: No dependency additions; preserve current API/history behavior; never infer provider attribution from archived consensus; isolate individual sensor failures; use UTC for matching and location timezone for display.
 
-**Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable or NEEDS CLARIFICATION]
-
-**Scale/Scope**: [domain-specific, e.g., 10k users, 1M LOC, 50 screens or NEEDS CLARIFICATION]
+**Scale/Scope**: At most 72 hours, current weather providers, and the existing configured-measurement limit per location; temperature only.
 
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-[Gates determined based on constitution file]
+- **I. Preserve Existing Architecture**: PASS — extend existing provider/service/storage/API and static UI.
+- **II. Treat Weather Data as Scientific Data**: PASS — persist provider and sensor identity, units, timestamps, forecast versus observation semantics, coverage, and missingness.
+- **III. Protect Existing Contracts and Configuration**: PASS — additive tables and endpoint; leave existing history and scoring data unchanged; no synthetic backfill.
+- **IV. Verify Behavior at the Right Risk Level**: PASS — tests cover persistence, matching, source isolation, timestamps, partial failures, and old contract compatibility.
+- **V. Keep the Experience Lightweight and Accessible**: PASS — use existing static UI, semantic tables, accessible controls, textual ratings, and responsive layout.
+- **VI. Keep User Documentation Understandable**: PASS — update the paired German and English Home Assistant measurement guides.
+
+No constitution violations identified.
+
+### Post-design check
+
+- Separate forecast and observation histories avoid presenting a consensus as an individual provider or a merged sensor as an individual measurement.
+- Existing consensus archive and `/api/history/{location_id}` remain untouched.
+- Fresh provider-specific history is available after deployment; old consensus rows cannot be safely attributed and are not migrated.
+- Retention remains bounded at 72 hours to match the existing hourly archive.
 
 ## Change Scope and Persona Selection
 
-**Impact tier**: [T0 / T1 / T2 / T3, using `.github/copilot-instructions.md`]
+**Impact tier**: T3 — new time-series persistence and a source-specific verification contract cross storage, provider refresh, Home Assistant history, API, and UI.
 
-**Affected surfaces**: [Backend/providers, API/data, Home Assistant, web UI,
-documentation, deployment, or other]
+**Affected surfaces**: Provider refresh and hourly forecast archival, SQLite storage, comparison API, Home Assistant history reads, responsive web UI, paired German/English documentation, backend/API/storage/UI tests.
 
-**Personas consulted**: [Selected personas and the specific question each
-reviewed; for T0/T1, record inline review or explain why none was needed]
+**Personas consulted**:
+- Python architecture — independent provider forecasts, source identity, UTC/retention, schema compatibility.
+- Home Assistant enthusiast — per-entity history and interpretation, unit/hour aggregation, HA failure behavior.
+- UI/UX developer — matrix/table information hierarchy, small-screen and accessible interactions.
+- Quality and Documentation — acceptance coverage, edge cases, test and bilingual documentation scope.
 
-**Personas not consulted**: [Only where helpful, explain why a potentially
-relevant persona was out of scope]
+**Personas not consulted**: EUMETSAT specialist; the feature compares ordinary provider forecasts and Home Assistant sensors and does not involve satellite products or nowcasting.
 
-**Compatibility and risk notes**: [API, stored data, configuration, provider
-semantics, UI, Home Assistant, and rollback implications as applicable]
+**Compatibility and risk notes**: Existing `hourly_predictions` stores consensus only and must remain unchanged. Add provider-keyed forecasts and per-sensor measurements; do not attribute legacy rows to providers. Preserve existing history and daily scoring. Convert provider and HA times to UTC for matching, render location-local time with timezone, retain new records for 72 hours, and preserve each HA instance/entity identity. No changes to HA setup/configuration or secrets.
 
 ## Project Structure
 
 ### Documentation (this feature)
 
 ```text
-specs/[###-feature]/
-├── plan.md              # This file (/speckit-plan command output)
-├── research.md          # Phase 0 output (/speckit-plan command)
-├── data-model.md        # Phase 1 output (/speckit-plan command)
-├── quickstart.md        # Phase 1 output (/speckit-plan command)
-├── contracts/           # Phase 1 output (/speckit-plan command)
-└── tasks.md             # Phase 2 output (/speckit-tasks command - NOT created by /speckit-plan)
+specs/004-hourly-source-comparison/
+├── spec.md
+├── plan.md
+├── research.md
+├── data-model.md
+├── quickstart.md
+├── contracts/
+│   └── source-comparison.md
+└── tasks.md
 ```
 
 ### Source Code (repository root)
-<!--
-  ACTION REQUIRED: Replace the placeholder tree below with the concrete layout
-  for this feature. Delete unused options and expand the chosen structure with
-  real paths (e.g., apps/admin, packages/something). The delivered plan must
-  not include Option labels.
--->
 
 ```text
-# [REMOVE IF UNUSED] Option 1: Single project (DEFAULT)
-src/
-├── models/
-├── services/
-├── cli/
-└── lib/
-
+app/
+├── models.py
+├── storage.py
+├── service.py
+├── main.py
+├── obs_sources/home_assistant.py
+└── static/index.html
 tests/
-├── contract/
-├── integration/
-└── unit/
-
-# [REMOVE IF UNUSED] Option 2: Web application (when "frontend" + "backend" detected)
-backend/
-├── src/
-│   ├── models/
-│   ├── services/
-│   └── api/
-└── tests/
-
-frontend/
-├── src/
-│   ├── components/
-│   ├── pages/
-│   └── services/
-└── tests/
-
-# [REMOVE IF UNUSED] Option 3: Mobile + API (when "iOS/Android" detected)
-api/
-└── [same as backend above]
-
-ios/ or android/
-└── [platform-specific structure: feature modules, UI flows, platform tests]
+├── test_storage.py
+├── test_observations.py
+├── test_service.py
+└── test_api.py
+docs/
+├── home-assistant-measurements.de.md
+└── home-assistant-measurements.en.md
 ```
 
-**Structure Decision**: [Document the selected structure and reference the real
-directories captured above]
+**Structure Decision**: Extend the existing single FastAPI application; use additive SQLite tables, a focused API response model and service method, the current HA history adapter, and the existing static dashboard. Add tests alongside the relevant existing suites and keep user guidance aligned in both languages.
 
 ## Complexity Tracking
 
-> **Fill ONLY if Constitution Check has violations that must be justified**
-
-| Violation | Why Needed | Simpler Alternative Rejected Because |
-|-----------|------------|-------------------------------------|
-| [e.g., 4th project] | [current need] | [why 3 projects insufficient] |
-| [e.g., Repository pattern] | [specific problem] | [why direct DB access insufficient] |
+No constitution violations require justification.

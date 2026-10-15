@@ -162,7 +162,7 @@ All settings are environment variables prefixed with `HAW_`
 | `HAW_OBSERVATION_SOURCES` | `open_meteo` | comma separated list of enabled real-world observation sources, see [Real world measurements](#real-world-measurements) |
 | `HAW_HOME_ASSISTANT_URL` / `HAW_HOME_ASSISTANT_TOKEN` | – | a single Home Assistant instance (shown as the read-only instance `environment`) |
 | `HAW_HOME_ASSISTANT_INDOOR_ENTITIES` / `HAW_HOME_ASSISTANT_OUTDOOR_ENTITIES` | `{}` | JSON object: `location_id` → list of entity ids of the `environment` instance |
-| `HAW_HOME_ASSISTANT_INSTANCES` | `[]` | JSON list of further instances: `[{"id": "garden", "name": "Garden", "url": "http://ha.local:8123", "token": "..."}]` |
+| `HAW_HOME_ASSISTANT_INSTANCES` | `[]` | JSON list of further instances; optional location pairing: `[{"id": "garden", "name": "Garden", "location_id": "vienna", "url": "http://ha.local:8123", "token": "..."}]` |
 | `HAW_HOME_ASSISTANT_MEASUREMENTS` | `[]` | JSON list of measurements: `[{"instance_id": "garden", "location_id": "vienna", "entity_id": "sensor.outdoor", "scope": "outdoor"}]` |
 | `HAW_ELASTICSEARCH_URL` / `HAW_ELASTICSEARCH_API_KEY` / `HAW_ELASTICSEARCH_INDEX` | – | a single Elasticsearch instance (shown as the read-only instance `environment`) |
 | `HAW_ELASTICSEARCH_LOCATION_FIELD` | `location_id` | term field used to select a location's documents in the `environment` instance |
@@ -189,11 +189,19 @@ Two additional, pluggable sources can be enabled through
   web UI (**Real world measurements → Home Assistant instances**) or through
   `HAW_HOME_ASSISTANT_INSTANCES`; the classic `HAW_HOME_ASSISTANT_URL` /
   `HAW_HOME_ASSISTANT_TOKEN` pair stays supported as the read-only instance
-  `environment`. Each **measurement** couples one numeric temperature entity
-  of an instance with a location and a scope (indoor/outdoor); maintain the
+  `environment`. In the UI, pair each instance with its **Location** once;
+  its **measurements** inherit that location and choose only the entity and
+  scope (indoor/outdoor). Existing unpaired, multi-location configurations stay
+  supported without silently moving sensors. Conflicting pairing changes are
+  rejected. Maintain the
   list in the UI (add, edit, delete) or via `HAW_HOME_ASSISTANT_MEASUREMENTS`.
   Each day's minimum/maximum sensor state becomes one observation; adding a
   measurement in the UI enables the `home_assistant` source automatically.
+  **Test** checks the selected sensor's current finite Celsius temperature
+  without saving it. Each measurement also has collapsed, on-demand **History**
+  for the rolling last 24 hours from Home Assistant Recorder, with timestamps,
+  empty/error feedback and refresh. Recorder history is not a local delivery
+  audit, and a successful current-state test does not guarantee recorded data.
   Tokens are stored in the database and never returned by the API. Deleting
   an instance or location also deletes its measurements. Previously saved
   single-instance UI settings are migrated to an instance named
@@ -245,12 +253,14 @@ others or the forecast refresh.
 | `POST /api/locations` | add a location `{"name": "Graz", "latitude": 47.07, "longitude": 15.44}` – without coordinates the name is geocoded via Open-Meteo |
 | `DELETE /api/locations/{location}` | remove a location added in the UI (environment locations are read-only) |
 | `GET /api/observation-sources` | real world measurement sources, Home Assistant instances and measurements |
-| `POST /api/observation-sources/home-assistant/instances` | add a Home Assistant instance `{"name": "Garden", "url": "http://ha.local:8123", "token": "..."}` |
-| `PUT /api/observation-sources/home-assistant/instances/{id}` | update name/URL; an empty token keeps the stored one |
+| `POST /api/observation-sources/home-assistant/instances` | add a Home Assistant instance `{"name": "Garden", "location_id": "vienna", "url": "http://ha.local:8123", "token": "..."}` |
+| `PUT /api/observation-sources/home-assistant/instances/{id}` | update name/URL/location pairing; incompatible existing mappings are rejected; an empty token keeps the stored one |
 | `DELETE /api/observation-sources/home-assistant/instances/{id}` | remove an instance and its measurements |
-| `POST /api/observation-sources/home-assistant/measurements` | add a measurement `{"instance_id": "garden", "location_id": "vienna", "entity_id": "sensor.outdoor", "scope": "outdoor", "name": ""}` |
+| `POST /api/observation-sources/home-assistant/measurements` | add a measurement `{"instance_id": "garden", "entity_id": "sensor.outdoor", "scope": "outdoor", "name": ""}`; location is inherited; legacy unpaired instances require explicit `location_id`, paired instances reject mismatches |
 | `PUT /api/observation-sources/home-assistant/measurements/{id}` | update a measurement |
 | `DELETE /api/observation-sources/home-assistant/measurements/{id}` | remove a measurement |
+| `POST /api/observation-sources/home-assistant/measurements/test` | read-only current-state usability test using the measurement input, including unsaved/environment sensors |
+| `POST /api/observation-sources/home-assistant/measurements/history` | read-only rolling 24-hour Recorder history using the measurement input; timestamped Celsius samples, not a local delivery audit |
 | `POST /api/observation-sources/elasticsearch/instances` | add an Elasticsearch instance `{"name": "Elastic Cloud", "url": "https://...", "api_key": "...", "index": "weather", "location_field": "location_id"}` |
 | `PUT /api/observation-sources/elasticsearch/instances/{id}` | update an instance; an empty API key keeps the stored one |
 | `DELETE /api/observation-sources/elasticsearch/instances/{id}` | remove an instance and its fields |

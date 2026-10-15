@@ -45,6 +45,8 @@ from .models import (
     HomeAssistantEntityInfo,
     HomeAssistantInstanceIn,
     HomeAssistantInstanceInfo,
+    HomeAssistantMeasurementHistory,
+    HomeAssistantMeasurementTest,
     HomeAssistantSettingsInfo,
     HourlySourceComparison,
     LocationForecast,
@@ -72,6 +74,8 @@ from .obs_sources.home_assistant import (
     discover_entities,
     effective_instances,
     effective_measurements,
+    read_measurement,
+    read_measurement_history,
     validate_discovery_url,
 )
 from .obs_sources.open_meteo import fetch_hourly_observations
@@ -157,6 +161,9 @@ class WeatherService:
         self._client_factory = client_factory or self._default_client
         self._cache: Dict[str, LocationForecast] = {}
         self._migrate_legacy_home_assistant()
+        if self.storage.ha_pairing_migration_pending:
+            self._infer_legacy_ha_pairings()
+            self.storage.ha_pairing_migration_pending = False
         self._migrate_legacy_elasticsearch()
         self.reload_providers()
 
@@ -349,6 +356,26 @@ class WeatherService:
             item.id for item in self.storage.ha_instances()
         }
 
+    def _infer_legacy_ha_pairings(self) -> None:
+        """Only migration-time, unique and valid mappings are safe to infer."""
+        measurements = effective_measurements(self.observation_settings())
+        for instance in self.storage.ha_instances():
+            if instance.id in effective_instances(self.settings):
+                continue
+            locations = {
+                item.location_id for item in measurements
+                if item.instance_id == instance.id
+            }
+            if instance.location_id is None and len(locations) == 1:
+                location_id = next(iter(locations))
+                try:
+                    self.location(location_id)
+                except UnknownLocationError:
+                    continue
+                self.storage.save_ha_instance(
+                    instance.model_copy(update={"location_id": location_id})
+                )
+
     def home_assistant_status(self) -> HomeAssistantSettingsInfo:
         settings = self.observation_settings()
         environment_instances = effective_instances(self.settings)
@@ -372,6 +399,7 @@ class WeatherService:
                 origin=origin,
                 configured=bool(item.url and item.token),
                 measurement_count=counts[item.id],
+                location_id=item.location_id,
             )
             for origin, items in (
                 ("environment", environment_instances.values()),
@@ -405,13 +433,16 @@ class WeatherService:
         raise UnknownInstanceError(instance_id)
 
     def add_ha_instance(self, body: HomeAssistantInstanceIn) -> ObservationSourcesInfo:
+        if body.location_id is not None:
+            self.location(body.location_id)
         instance_id = _unique_id(
             _slug(body.name, "home_assistant"),
             self._instance_ids() | {ENVIRONMENT_INSTANCE_ID},
         )
         self.storage.save_ha_instance(
             HomeAssistantInstance(
-                id=instance_id, name=body.name, url=body.url, token=body.token
+                id=instance_id, name=body.name, url=body.url, token=body.token,
+                location_id=body.location_id,
             )
         )
         self.activity.record(ActivityEvent.HA_INSTANCE_ADDED)
@@ -421,6 +452,26 @@ class WeatherService:
         self, instance_id: str, body: HomeAssistantInstanceIn
     ) -> ObservationSourcesInfo:
         stored = self._stored_instance(instance_id)
+        location_id = (
+            body.location_id if "location_id" in body.model_fields_set
+            else stored.location_id
+        )
+        if location_id is not None:
+            self.location(location_id)
+        if location_id != stored.location_id:
+            measurements = effective_measurements(self.observation_settings())
+            if any(
+                item.instance_id == instance_id
+                and (location_id is None or item.location_id != location_id)
+                for item in measurements
+            ) or (
+                stored.location_id is not None
+                and self.storage.ha_instance_has_history(instance_id, stored.location_id)
+            ) or any(
+                old_location != location_id
+                for old_location in self.storage.ha_instance_history_locations(instance_id)
+            ):
+                raise ConflictError("instance pairing conflicts with existing measurements or history")
         self.storage.save_ha_instance(
             HomeAssistantInstance(
                 id=instance_id,
@@ -429,6 +480,7 @@ class WeatherService:
                 # an empty token keeps the stored one
                 url=body.url,
                 token=body.token or stored.token,
+                location_id=location_id,
             )
         )
         self.activity.record(ActivityEvent.HA_INSTANCE_UPDATED)
@@ -462,17 +514,52 @@ class WeatherService:
         except Exception as exc:  # noqa: BLE001 - upstream details may contain secrets
             raise HomeAssistantDiscoveryError from exc
 
+    def _resolve_measurement(self, body: MeasurementIn) -> Measurement:
+        instance = effective_instances(self.observation_settings()).get(body.instance_id)
+        if instance is None:
+            raise UnknownInstanceError(body.instance_id)
+        if (
+            instance.location_id is not None
+            and body.location_id is not None
+            and instance.location_id != body.location_id
+        ):
+            raise ConflictError("measurement location does not match instance pairing")
+        location_id = instance.location_id or body.location_id
+        if location_id is None:
+            raise ConflictError("unpaired instances require an explicit measurement location")
+        self.location(location_id)
+        return Measurement(**{**body.model_dump(), "location_id": location_id})
+
+    async def probe_ha_measurement(
+        self, body: MeasurementIn, *, history: bool = False
+    ) -> HomeAssistantMeasurementTest | HomeAssistantMeasurementHistory:
+        measurement = self._resolve_measurement(body)
+        instance = effective_instances(self.observation_settings())[body.instance_id]
+        if not instance.url or not instance.token:
+            raise ConflictError("Home Assistant instance is not configured")
+        try:
+            validate_discovery_url(instance)
+        except ValueError as exc:
+            raise ConflictError("Home Assistant instance URL is invalid") from exc
+        try:
+            async with self._client_factory() as client:
+                if history:
+                    return await read_measurement_history(client, instance, measurement)
+                return await read_measurement(client, instance, measurement)
+        except httpx.TimeoutException as exc:
+            raise HomeAssistantDiscoveryTimeoutError from exc
+        except Exception as exc:  # noqa: BLE001 - never expose upstream secrets
+            raise HomeAssistantDiscoveryError from exc
+
     def _check_measurement(
         self, body: MeasurementIn, ignore_id: Optional[int] = None
     ) -> Measurement:
-        self.location(body.location_id)  # raises UnknownLocationError
-        if body.instance_id not in self._instance_ids():
-            raise UnknownInstanceError(body.instance_id)
+        measurement = self._resolve_measurement(body)
         settings = self.observation_settings()
         same_slot = [
             item
             for item in effective_measurements(settings)
-            if item.location_id == body.location_id
+            if item.location_id == measurement.location_id
             and item.scope == body.scope
             and (ignore_id is None or item.id != ignore_id)
         ]
@@ -481,7 +568,7 @@ class WeatherService:
                 f"at most {MAX_ENTITIES_PER_LOCATION} {body.scope} measurements "
                 "per location"
             )
-        return Measurement(**body.model_dump())
+        return measurement
 
     def add_measurement(self, body: MeasurementIn) -> ObservationSourcesInfo:
         measurement = self._check_measurement(body)
@@ -863,6 +950,11 @@ class WeatherService:
             raise ConflictError(
                 f"location '{location_id}' is configured through the environment"
             )
+        if any(
+            item.location_id == location_id
+            for item in effective_instances(self.observation_settings()).values()
+        ):
+            raise ConflictError("location is paired with a Home Assistant instance")
         if not self.storage.delete_location(location_id):
             raise UnknownLocationError(location_id)
         self._cache.pop(location_id, None)

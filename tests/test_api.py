@@ -478,6 +478,7 @@ def test_home_assistant_instances_can_be_added(api):
         "origin": "ui",
         "configured": True,
         "measurement_count": 0,
+        "location_id": None,
     }
     assert "secret-token" not in api.get("/api/observation-sources").text
 

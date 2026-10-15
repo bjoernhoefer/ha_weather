@@ -23,6 +23,8 @@ from .models import (
     ForecastHistory,
     HomeAssistantEntityInfo,
     HomeAssistantInstanceIn,
+    HomeAssistantMeasurementHistory,
+    HomeAssistantMeasurementTest,
     LocationForecast,
     LocationIn,
     LocationInfo,
@@ -364,7 +366,46 @@ def create_app(
     async def add_home_assistant_instance(
         body: HomeAssistantInstanceIn, service: WeatherService = Depends(get_service)
     ) -> ObservationSourcesInfo:
-        return service.add_ha_instance(body)
+        return _guard_measurements(service.add_ha_instance, body)
+
+    async def probe_measurement(body, response, service, *, history=False):
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            return await service.probe_ha_measurement(body, history=history)
+        except UnknownLocationError as exc:
+            raise _unknown_location(exc) from exc
+        except UnknownInstanceError as exc:
+            raise HTTPException(404, "Unknown Home Assistant instance") from exc
+        except ConflictError as exc:
+            raise _conflict(exc) from exc
+        except HomeAssistantDiscoveryTimeoutError as exc:
+            raise HTTPException(504, "Home Assistant measurement request timed out") from exc
+        except HomeAssistantDiscoveryError as exc:
+            raise HTTPException(502, "Could not read usable Home Assistant temperature data") from exc
+
+    @app.post(
+        "/api/observation-sources/home-assistant/measurements/test",
+        response_model=HomeAssistantMeasurementTest,
+        dependencies=protected,
+    )
+    async def test_home_assistant_measurement(
+        body: MeasurementIn,
+        response: Response,
+        service: WeatherService = Depends(get_service),
+    ) -> HomeAssistantMeasurementTest:
+        return await probe_measurement(body, response, service)
+
+    @app.post(
+        "/api/observation-sources/home-assistant/measurements/history",
+        response_model=HomeAssistantMeasurementHistory,
+        dependencies=protected,
+    )
+    async def home_assistant_measurement_history(
+        body: MeasurementIn,
+        response: Response,
+        service: WeatherService = Depends(get_service),
+    ) -> HomeAssistantMeasurementHistory:
+        return await probe_measurement(body, response, service, history=True)
 
     @app.put(
         "/api/observation-sources/home-assistant/instances/{instance_id}",

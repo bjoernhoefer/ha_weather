@@ -301,6 +301,7 @@ class HomeAssistantInstanceIn(BaseModel):
     name: str = Field(min_length=1, max_length=MAX_SETTING_LENGTH)
     url: Optional[str] = None
     token: Optional[str] = None
+    location_id: Optional[str] = Field(default=None, min_length=1, max_length=40)
 
     @field_validator("name", mode="after")
     @classmethod
@@ -328,6 +329,7 @@ class HomeAssistantInstanceInfo(BaseModel):
     #: ``True`` when URL and token are set
     configured: bool = False
     measurement_count: int = 0
+    location_id: Optional[str] = None
 
 
 class HomeAssistantEntityInfo(BaseModel):
@@ -344,7 +346,7 @@ class MeasurementIn(BaseModel):
     """A Home Assistant sensor coupled with an instance and a location."""
 
     instance_id: str = Field(min_length=1, max_length=40)
-    location_id: str = Field(min_length=1, max_length=40)
+    location_id: Optional[str] = Field(default=None, min_length=1, max_length=40)
     entity_id: str = Field(
         min_length=3, max_length=MAX_ENTITY_LENGTH, pattern=r"^[a-z0-9_]+\.[a-z0-9_]+$"
     )
@@ -373,6 +375,38 @@ class MeasurementInfo(BaseModel):
     name: str = ""
     #: ``"ui"`` (editable) or ``"environment"`` (read only)
     origin: str = "ui"
+
+
+class HomeAssistantMeasurementTest(BaseModel):
+    """Validated live Celsius state; timestamps are supplied by Home Assistant."""
+
+    source: Literal["home_assistant_state"] = "home_assistant_state"
+    instance_id: str
+    location_id: str
+    entity_id: str
+    unit: Literal["°C"] = "°C"
+    value: float
+    last_changed: datetime
+    last_updated: datetime
+
+
+class HomeAssistantHistorySample(BaseModel):
+    timestamp: datetime
+    value: float
+    carried: bool = False
+
+
+class HomeAssistantMeasurementHistory(BaseModel):
+    """Recorder state changes, not the local hourly polling archive."""
+
+    source: Literal["home_assistant_recorder"] = "home_assistant_recorder"
+    instance_id: str
+    location_id: str
+    entity_id: str
+    unit: Literal["°C"] = "°C"
+    start: datetime
+    end: datetime
+    samples: List[HomeAssistantHistorySample] = Field(default_factory=list)
 
 
 class HomeAssistantSettingsInfo(BaseModel):

@@ -39,6 +39,7 @@ class HomeAssistantInstance(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     url: Optional[str] = None
     token: Optional[str] = None
+    location_id: Optional[str] = None
 
 
 class Measurement(BaseModel):

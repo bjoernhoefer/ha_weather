@@ -31,4 +31,4 @@
 
 ## Notes
 
-- Assessment thresholds and hourly carry-forward semantics are explicit v1 assumptions, not ranking or scoring policy.
+- Assessment thresholds, per-sensor state carry-forward, and invalid-state handling are explicit v1 assumptions, not ranking or scoring policy.

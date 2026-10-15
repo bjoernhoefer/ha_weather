@@ -28,19 +28,19 @@ No shared infrastructure tasks are required. Existing storage initialization, au
 
 ### Tests for User Story 1
 
-- [ ] T001 [P] [US1] Add provider-hourly and sensor-hourly archive tests for first-write preservation, UTC keys, 72-hour retention, and round trips in `tests/test_storage.py`.
-- [ ] T002 [P] [US1] Add per-entity Home Assistant history tests for source separation, outdoor-only filtering, Celsius validation, non-finite readings, and partial failures in `tests/test_observations.py`.
-- [ ] T003 [P] [US1] Add comparison API tests for multi-provider × multi-sensor results, signed/absolute error, rating thresholds, missing values, and unchanged `/api/history` in `tests/test_api.py`.
+- [X] T001 [P] [US1] Add provider-hourly and sensor-hourly archive tests for first-write preservation, UTC keys, 72-hour retention, and round trips in `tests/test_storage.py`.
+- [X] T002 [P] [US1] Add per-entity Home Assistant history tests for source separation, outdoor-only filtering, Celsius validation, non-finite readings, and partial failures in `tests/test_observations.py`.
+- [X] T003 [P] [US1] Add comparison API tests for multi-provider × multi-sensor results, signed/absolute error, rating thresholds, missing values, and unchanged `/api/history` in `tests/test_api.py`.
 
 ### Implementation for User Story 1
 
-- [ ] T004 [US1] Add typed provider-source comparison response models in `app/models.py`.
-- [ ] T005 [US1] Add additive provider-hourly-forecast and source-hourly-measurement tables, UTC-keyed save/read methods, first-provider-forecast preservation, per-measurement updates, and 72-hour cleanup in `app/storage.py`.
-- [ ] T006 [US1] Fetch hourly Home Assistant history independently per configured outdoor entity; preserve stable instance/entity identity, verify Celsius temperature attributes, ignore non-finite states, and isolate individual request failures in `app/obs_sources/home_assistant.py`.
-- [ ] T007 [US1] Archive each successful provider's individual hourly forecast during refresh without changing consensus archival in `app/service.py`.
-- [ ] T008 [US1] Implement the bounded source-comparison service response, matching timestamps in UTC and computing pairwise error/assessment only when both values exist, in `app/service.py`.
-- [ ] T009 [US1] Add the protected `GET /api/source-comparison/{location_id}` route with validated 24/48/72-hour windows in `app/main.py`.
-- [ ] T010 [US1] Run focused storage, Home Assistant, service, and API tests and resolve failures in `tests/test_storage.py`, `tests/test_observations.py`, `tests/test_service.py`, and `tests/test_api.py`.
+- [X] T004 [US1] Add typed provider-source comparison response models in `app/models.py`.
+- [X] T005 [US1] Add additive provider-hourly-forecast and source-hourly-measurement tables, UTC-keyed save/read methods, first-provider-forecast preservation, per-measurement updates, and 72-hour cleanup in `app/storage.py`.
+- [X] T006 [US1] Fetch hourly Home Assistant history independently per configured outdoor entity; preserve stable instance/entity identity, verify Celsius temperature attributes, ignore non-finite states, and isolate individual request failures in `app/obs_sources/home_assistant.py`.
+- [X] T007 [US1] Archive each successful provider's individual hourly forecast during refresh without changing consensus archival in `app/service.py`.
+- [X] T008 [US1] Implement the bounded source-comparison service response, matching timestamps in UTC and computing pairwise error/assessment only when both values exist, in `app/service.py`.
+- [X] T009 [US1] Add the protected `GET /api/source-comparison/{location_id}` route with validated 24/48/72-hour windows in `app/main.py`.
+- [X] T010 [US1] Run focused storage, Home Assistant, service, and API tests and resolve failures in `tests/test_storage.py`, `tests/test_observations.py`, `tests/test_service.py`, and `tests/test_api.py`.
 
 **Checkpoint**: All provider/sensor pairs are independently auditable through the additive API and existing history behavior remains intact.
 
@@ -52,23 +52,24 @@ No shared infrastructure tasks are required. Existing storage initialization, au
 
 ### Tests for User Story 2
 
-- [ ] T011 [P] [US2] Add API tests for supported period boundaries, timezone metadata, empty archive, and invalid period validation in `tests/test_api.py`.
-- [ ] T012 [P] [US2] Add dashboard-serving regression assertions for accessible matrix/table controls and existing history section preservation in `tests/test_api.py`.
+- [X] T011 [P] [US2] Add API tests for supported period boundaries, timezone metadata, empty archive, and invalid period validation in `tests/test_api.py`.
+- [X] T012 [P] [US2] Add dashboard-serving regression assertions for accessible matrix/table controls and existing history section preservation in `tests/test_api.py`.
 
 ### Implementation for User Story 2
 
-- [ ] T013 [US2] Add a responsive accessible source matrix, 24/48/72-hour selector, selected-hour control, detailed rows for the selected period, local timezone formatting, textual error ratings, and distinct loading/empty/error states in `app/static/index.html`.
-- [ ] T014 [US2] Document the independent hourly comparison, Celsius requirement, error interpretation, retention, missing data, and source setup in `docs/home-assistant-measurements.de.md`.
-- [ ] T015 [US2] Keep the English Home Assistant measurement guide aligned with the feature scope and setup semantics in `docs/home-assistant-measurements.en.md`.
-- [ ] T016 [US2] Update the user-facing API/history overview to distinguish provider-specific hourly comparisons from consensus history in `README.md`.
+- [X] T013 [US2] Add a responsive accessible source matrix, 24/48/72-hour selector, selected-hour control, detailed rows for the selected period, local timezone formatting, textual error ratings, and distinct loading/empty/error states in `app/static/index.html`.
+- [X] T014 [US2] Document the independent hourly comparison, Celsius requirement, error interpretation, retention, missing data, and source setup in `docs/home-assistant-measurements.de.md`.
+- [X] T015 [US2] Keep the English Home Assistant measurement guide aligned with the feature scope and setup semantics in `docs/home-assistant-measurements.en.md`.
+- [X] T016 [US2] Update the user-facing API/history overview to distinguish provider-specific hourly comparisons from consensus history in `README.md`.
 - [ ] T017 [US2] Verify paired documentation consistency, responsive narrow-screen presentation, keyboard operation, and the 24/48/72-hour quickstart in `specs/004-hourly-source-comparison/quickstart.md`.
 
 **Checkpoint**: Users can select a bounded recent period and inspect a clear, usable matrix and detail table on desktop and mobile.
 
 ## Phase 5: Polish & Cross-Cutting Concerns
 
-- [ ] T018 [P] Run focused tests and the complete `pytest -q` suite; record actual results in the task summary using `tests/`.
-- [ ] T019 [P] Review the implementation against API/data-model contracts and verify changed files for secrets using the repository file paths in the implementation diff.
+- [ ] T018 [P] Run the complete `pytest -q` suite using `pytest.ini` and record the result.
+- [ ] T019 Review API and persisted-data behavior against `specs/004-hourly-source-comparison/contracts/source-comparison.md` and `specs/004-hourly-source-comparison/data-model.md`.
+- [ ] T020 Scan changed source, test, and documentation files for secrets before the final commit.
 
 ## Dependencies & Execution Order
 
@@ -87,7 +88,7 @@ No shared infrastructure tasks are required. Existing storage initialization, au
 
 - T001, T002, and T003 can be authored in parallel because they touch separate test files.
 - US1 model/storage and HA adapter tests can be developed independently before service integration.
-- T011 and T012 can be authored in parallel because they touch separate test cases in the same file only if coordinated; otherwise perform sequentially to avoid conflicts.
+- T011 and T012 share `tests/test_api.py`; author them sequentially to avoid conflicts.
 - The German and English guides (T014/T015) may be updated in parallel.
 
 ## Implementation Strategy
@@ -108,5 +109,6 @@ No shared infrastructure tasks are required. Existing storage initialization, au
 
 - Existing consensus forecasts must never be copied into source-specific rows.
 - Treat one Home Assistant instance/entity pair as one source; never average distinct sensors together.
+- Carry a recorded sensor state into the next hour until another valid or invalid state event is recorded; invalid and non-Celsius events reset the carried value.
 - Keep temperature thresholds explicit: `good` ≤1 °C, `check` >1 °C and ≤2 °C, `large` >2 °C.
 - Do not add runtime or test dependencies.

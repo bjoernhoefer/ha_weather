@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 import threading
@@ -857,13 +858,16 @@ class Storage:
                 target = _as_utc(hour.target_time)
                 if target <= issued:
                     continue
+                temperature = hour.temperature
+                if temperature is not None and not math.isfinite(temperature):
+                    temperature = None
                 rows.append(
                     (
                         forecast.provider,
                         forecast.location_id,
                         target.isoformat(),
                         issued.isoformat(),
-                        hour.temperature,
+                        temperature,
                     )
                 )
         cutoff = (
@@ -875,7 +879,17 @@ class Storage:
                 INSERT INTO provider_hourly_forecasts
                     (provider, location_id, target_time, issued_at, temperature)
                 VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT (provider, location_id, target_time) DO NOTHING
+                ON CONFLICT (provider, location_id, target_time)
+                DO UPDATE SET
+                    issued_at=CASE
+                        WHEN provider_hourly_forecasts.temperature IS NULL
+                            AND excluded.temperature IS NOT NULL
+                        THEN excluded.issued_at
+                        ELSE provider_hourly_forecasts.issued_at
+                    END,
+                    temperature=COALESCE(
+                        provider_hourly_forecasts.temperature, excluded.temperature
+                    )
                 """,
                 rows,
             )

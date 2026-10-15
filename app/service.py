@@ -1137,14 +1137,14 @@ class WeatherService:
                     absolute_error = (
                         round(abs(raw_error), 2) if raw_error is not None else None
                     )
-                    assessment = (
-                        "good"
-                        if raw_error is not None and abs(raw_error) <= 1
-                        else "check"
-                        if raw_error is not None and abs(raw_error) <= 2
-                        else "large" if raw_error is not None
-                        else None
-                    )
+                    assessment = None
+                    if raw_error is not None:
+                        if abs(raw_error) <= 1:
+                            assessment = "good"
+                        elif abs(raw_error) <= 2:
+                            assessment = "check"
+                        else:
+                            assessment = "large"
                     comparisons.append(
                         HourlySourceComparison(
                             provider=provider,

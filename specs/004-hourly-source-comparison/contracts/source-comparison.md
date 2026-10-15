@@ -17,6 +17,13 @@ Returns a bounded provider-by-Home-Assistant-sensor temperature comparison for a
   "generated_at": "2026-10-15T10:00:00Z",
   "start": "2026-10-14T10:00:00Z",
   "end": "2026-10-15T10:00:00Z",
+  "providers": ["open_meteo"],
+  "sources": [
+    {
+      "id": "home:sensor.garden_temperature",
+      "name": "Home / Garden"
+    }
+  ],
   "hours": [
     {
       "target_time": "2026-10-15T09:00:00Z",

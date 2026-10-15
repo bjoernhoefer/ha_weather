@@ -14,6 +14,8 @@
 - **Rationale**: Existing observations merge source values per day, and the current hourly helper combines all outdoor entities. Either behavior would conceal which sensor supplied a reading.
 - **Alternatives considered**: Reuse merged daily observations (wrong temporal granularity); average sensors together (loses pairwise comparison); use display names as keys (names can change).
 
+For this feature, only finite numeric Celsius temperature events are valid; an invalid, non-Celsius, or non-finite event clears the carried-forward state. Existing HA semantics carry a stable state into subsequent hours; a freshness timeout is not available from the configured sensor contract and is not inferred.
+
 ### Use bounded time selection and explicit temperature categories
 
 - **Decision**: Support 24, 48, and 72-hour windows; show a matrix for the selected hour and detailed rows for the selected window. Display signed and absolute error separately. Label absolute errors `Good` through 1 °C, `Check` over 1 °C through 2 °C, and `Large` over 2 °C.

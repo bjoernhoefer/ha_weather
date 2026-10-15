@@ -87,7 +87,7 @@ As a dashboard user, I want to choose a recent time range and inspect hour-by-ho
 
 - V1 compares temperature only because configured Home Assistant measurements are numeric temperature sensors; precipitation observations are not available per sensor.
 - Each configured outdoor Home Assistant entity is a distinct comparison source. Values from different entities or instances are never averaged together.
-- The existing hourly sensor aggregation rule is used per entity: state values in an hour, including the carried-forward state, determine that hour's mean.
+- Each configured sensor is evaluated separately. A recorded numeric Celsius state carries forward into later hours until another state event; invalid, non-Celsius, or non-finite events reset it. The hourly mean is not time-weighted, and no stale-reading timeout is inferred.
 - Comparisons use absolute UTC hours; the UI formats timestamps in the configured location timezone and includes the timezone context.
 - The initial supported comparison window is limited to the existing hourly archive retention (up to 72 hours); only forecasts recorded after this feature is deployed are available.
 - Temperature assessments use three explicit absolute-error bands: up to 1 °C, over 1 °C through 2 °C, and over 2 °C. These are display categories, not a provider ranking score.

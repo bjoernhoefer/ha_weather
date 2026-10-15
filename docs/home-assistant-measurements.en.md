@@ -37,6 +37,8 @@ shown separately. Assessments are `Good` up to 1 °C, `Check` above 1 °C throug
 provider ranking score. If either value is missing or the HA history does not
 identify a Celsius temperature sensor, the error and assessment are unavailable.
 `unavailable` and other invalid states are not treated as measured values.
+Recorded values carry forward while the sensor state remains unchanged; the
+comparison does not impose a separate freshness timeout.
 
 Only source-specific forecasts collected after this feature is deployed can be
 compared. New hourly data is retained for up to 72 hours; existing consensus

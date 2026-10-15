@@ -321,6 +321,38 @@ def test_provider_hourly_forecasts_keep_first_value_per_provider_and_utc_hour(st
     assert stored[1]["issued_at"] == first_issued.isoformat()
 
 
+def test_provider_hourly_forecast_fills_missing_temperature_without_storing_nan(storage):
+    target = now_utc().replace(minute=0, second=0, microsecond=0) + timedelta(hours=5)
+    first_issued = target - timedelta(hours=20)
+    later_issued = target - timedelta(hours=1)
+    storage.save_provider_hourly_forecasts(
+        [
+            ProviderForecast(
+                provider="open_meteo",
+                location_id="vienna",
+                issued_at=first_issued,
+                hours=[HourlyForecast(target_time=target, temperature=float("nan"))],
+            )
+        ]
+    )
+    storage.save_provider_hourly_forecasts(
+        [
+            ProviderForecast(
+                provider="open_meteo",
+                location_id="vienna",
+                issued_at=later_issued,
+                hours=[HourlyForecast(target_time=target, temperature=12.0)],
+            )
+        ]
+    )
+    (stored,) = storage.provider_hourly_forecasts(
+        "vienna", target - timedelta(hours=1), target + timedelta(hours=1)
+    )
+
+    assert stored["temperature"] == 12.0
+    assert stored["issued_at"] == later_issued.isoformat()
+
+
 def test_hourly_comparison_archives_expire_after_three_days(storage):
     target = now_utc().replace(minute=0, second=0, microsecond=0) - timedelta(days=4)
     storage.save_provider_hourly_forecasts(

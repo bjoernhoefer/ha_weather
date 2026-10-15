@@ -39,6 +39,8 @@ Temperaturstufen, kein Provider-Ranking-Score. Fehlt ein Wert oder weist die
 Home-Assistant-Historie keinen Celsius-Temperatursensor aus, sind Fehler und
 Bewertung nicht verfügbar. `unavailable` und andere ungültige Zustände gelten
 nicht als Messwerte.
+Ein aufgezeichneter Wert wird weitergeführt, solange sich der Sensorzustand
+nicht ändert; die Auswertung setzt keine zusätzliche Aktualitätsgrenze.
 
 Verglichen werden nur quellenspezifische Prognosen, die nach Bereitstellung
 dieser Funktion gesammelt wurden. Neue Stundenwerte bleiben bis zu 72 Stunden

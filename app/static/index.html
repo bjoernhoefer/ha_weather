@@ -60,7 +60,7 @@
       button { cursor: pointer; font-size: .88rem; font-weight: 650; transition: background .15s, border-color .15s, transform .15s; }
       button:hover { border-color: #a9c8b5; background: var(--accent-soft); }
       button:active { transform: translateY(1px); }
-      button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid #78b99a88; outline-offset: 2px; }
+      button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
       #refresh { border-color: var(--accent); background: var(--accent); color: white; }
       #refresh:hover { background: #1d624b; }
       #status { min-height: 1.2rem; margin-top: .75rem; }
@@ -70,7 +70,10 @@
       .dashboard-nav a:hover { background: var(--accent-soft); color: var(--accent); }
       details.fold { margin: 0 auto 1rem; padding: 1.15rem 1.25rem; border: 1px solid var(--border); border-radius: 1rem; background: var(--surface); box-shadow: var(--shadow); scroll-margin-top: 1rem; }
       details.fold[open] { padding-bottom: 1.4rem; }
-      details.fold > summary { cursor: pointer; list-style-position: outside; }
+      summary { cursor: pointer; list-style: none; }
+      summary::marker { content: ""; }
+      summary::-webkit-details-marker { display: none; }
+      summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; border-radius: .2rem; }
       details.fold > summary > h2, details.fold > summary > h3 { display: inline; margin: 0; }
       details.fold > summary > h2 { font-size: 1.2rem; }
       details.fold > summary > h3 { font-size: 1rem; }
@@ -104,6 +107,19 @@
       details.fold > p { max-width: 78ch; }
       form.bar { margin-top: .8rem; }
       td .bar { flex-wrap: nowrap; }
+      #haInstanceForm, #measurementForm { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; }
+      #haInstanceForm > label, #measurementForm > label { display: grid; gap: .3rem; min-width: 0; }
+      #haInstanceForm input, #haInstanceForm select, #measurementForm input, #measurementForm select { width: 100%; min-width: 0; }
+      #measurementForm .entity-discovery, .ha-form-status, .ha-form-actions { grid-column: 1 / -1; }
+      .ha-form-actions > button { flex: 1 1 10rem; }
+      .ha-form-status { margin: 0; overflow-wrap: anywhere; }
+      .ha-diagnostics { min-width: 16rem; max-width: 28rem; white-space: normal; overflow-wrap: anywhere; }
+      .ha-diagnostics p { margin: .5rem 0; }
+      .ha-diagnostics details { margin-top: .65rem; padding: .6rem; border: 1px solid var(--border); border-radius: .65rem; }
+      .ha-diagnostics summary { font-weight: 650; }
+      .ha-history-list { max-height: 15rem; overflow-y: auto; padding-left: 1.3rem; font-size: .82rem; }
+      button:disabled { cursor: not-allowed; opacity: .65; }
+      @media (prefers-reduced-motion: reduce) { button { transition: none; } }
       #providerExplanation { margin-top: 1rem; }
       .comparison-controls { margin: 1rem 0; }
       .comparison-controls label { display: grid; gap: .3rem; }
@@ -116,7 +132,6 @@
       .assessment-good { color: #167348; }
       .assessment-check { color: #8a6200; }
       .assessment-large { color: #b44d32; }
-      #loggingSection > summary:focus-visible { outline: 3px solid #78b99a88; outline-offset: 4px; }
       .log-controls { margin-top: 1rem; }
       .log-controls label { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; min-width: 0; max-width: 100%; }
       .log-controls select { max-width: 100%; }
@@ -144,6 +159,9 @@
         .dashboard-controls .dashboard-location { grid-template-columns: minmax(0, 1fr); }
         .dashboard-controls button { flex: initial; }
         .entity-discovery .entity-search-controls { grid-template-columns: minmax(0, 1fr); }
+        #haInstanceForm, #measurementForm { grid-template-columns: minmax(0, 1fr); }
+        #measurementsSection form.bar > label { display: grid; gap: .3rem; width: 100%; min-width: 0; }
+        #measurementsSection form.bar input, #measurementsSection form.bar select { width: 100%; min-width: 0; max-width: 100%; }
         details.fold { padding: 1rem; }
       }
       @media (min-width: 641px) and (max-width: 900px) {
@@ -351,8 +369,9 @@
       <summary><h2>Real world measurements</h2></summary>
       <p class="muted">
         Measured values verify the providers and the history. Add every Home
-        Assistant or Elasticsearch instance once, then couple its sensors or
-        fields with an instance and a location in the lists below. Only
+        Assistant or Elasticsearch instance once. Pair each Home Assistant instance
+        with a location; its sensors inherit that location. Elasticsearch fields
+        select a location separately. Only
         outdoor measurements are used to score the providers. Tokens and API keys are stored on the server and
         never shown again.
       </p>
@@ -361,28 +380,31 @@
       <p id="homeAssistantState" class="muted"></p>
       <table>
         <thead>
-          <tr><th>Name</th><th>Id</th><th>URL</th><th>Token</th><th>Origin</th><th>Measurements</th><th></th></tr>
+          <tr><th>Name</th><th>Id</th><th>Location</th><th>URL</th><th>Token</th><th>Origin</th><th>Measurements</th><th>Actions</th></tr>
         </thead>
         <tbody id="haInstances"></tbody>
       </table>
       <form id="haInstanceForm" class="bar">
         <label>Name <input id="haName" required maxlength="100" placeholder="e.g. Vienna flat" /></label>
+        <label>Location <select id="haLocation" required aria-describedby="haInstanceLocationHelp"></select></label>
         <label>URL <input id="haUrl" type="url" maxlength="500" placeholder="http://homeassistant.local:8123" /></label>
         <label>Long-lived token <input id="haToken" type="password" autocomplete="off" maxlength="500" placeholder="token" /></label>
-        <button type="submit" id="haInstanceSubmit">Add instance</button>
-        <button type="button" id="haInstanceCancel" hidden>Cancel</button>
+        <p id="haInstanceLocationHelp" class="muted ha-form-status" hidden>Keep legacy / unpaired locations to update the name or credentials without moving existing measurements. A new pairing must be compatible with their existing locations.</p>
+        <div class="bar ha-form-actions">
+          <button type="submit" id="haInstanceSubmit">Add instance</button>
+          <button type="button" id="haInstanceCancel" hidden>Cancel</button>
+        </div>
       </form>
 
       <h3>Measurements</h3>
       <table>
         <thead>
-          <tr><th>Name</th><th>Entity</th><th>Location</th><th>Instance</th><th>Scope</th><th>Origin</th><th></th></tr>
+          <tr><th>Name</th><th>Entity</th><th>Location</th><th>Instance</th><th>Scope</th><th>Origin</th><th>Actions &amp; diagnostics</th></tr>
         </thead>
         <tbody id="measurements"></tbody>
       </table>
       <form id="measurementForm" class="bar">
-        <label>Instance <select id="measurementInstance" required></select></label>
-        <label>Location <select id="measurementLocation" required></select></label>
+        <label>Instance <select id="measurementInstance" required aria-describedby="measurementLocation"></select></label>
         <label>Entity <input id="measurementEntity" required maxlength="200" pattern="[a-z0-9_]+\.[a-z0-9_]+" placeholder="sensor.garden_temperature" /></label>
         <label>Scope
           <select id="measurementScope">
@@ -391,6 +413,7 @@
           </select>
         </label>
         <label>Name <input id="measurementName" maxlength="100" placeholder="optional" /></label>
+        <p id="measurementLocation" class="muted ha-form-status" role="status"></p>
         <div class="entity-discovery" aria-describedby="haEntitySearchDescription">
           <p id="haEntitySearchDescription" class="muted">
             Search currently available Home Assistant entities by display name or ID. Only numeric temperature sensors in &deg;C can be selected; other matches are shown for reference.
@@ -406,8 +429,12 @@
           </label>
           <p id="haEntitySearchStatus" class="muted" role="status" aria-live="polite"></p>
         </div>
-        <button type="submit" id="measurementSubmit">Add measurement</button>
-        <button type="button" id="measurementCancel" hidden>Cancel</button>
+        <div class="bar ha-form-actions">
+          <button type="submit" id="measurementSubmit">Add measurement</button>
+          <button type="button" id="measurementTest">Test measurement</button>
+          <button type="button" id="measurementCancel" hidden>Cancel</button>
+        </div>
+        <p id="measurementTestStatus" class="muted ha-form-status" role="status" aria-live="polite"></p>
       </form>
 
       <h3>Elasticsearch instances</h3>
@@ -1029,7 +1056,10 @@
       let locations = [];
       let observationSources = null;
       let editingInstance = null;
+      let editingInstanceRecord = null;
       let editingMeasurement = null;
+      let editingMeasurementRecord = null;
+      let measurementTestRequest = 0;
       let editingEsInstance = null;
       let editingEsMeasurement = null;
       let entitySearchRequest = 0;
@@ -1114,7 +1144,8 @@
           entityId: entity.entity_id,
         };
         $("haEntitySearchStatus").textContent =
-          `${entity.name} selected. Choose a location and save the outdoor measurement.`;
+          `${entity.name} selected. Review the inherited location and scope, then test or save.`;
+        invalidateMeasurementTest();
       });
       $("measurementInstance").addEventListener("change", () => {
         if (
@@ -1126,9 +1157,222 @@
           selectedDiscoveredMeasurement = null;
         }
         clearEntityDiscovery("Search again to find entities on this instance.");
+        updateMeasurementLocation();
+        invalidateMeasurementTest();
       });
       $("measurementEntity").addEventListener("input", () => {
         selectedDiscoveredMeasurement = null;
+        invalidateMeasurementTest();
+      });
+
+      function instanceLocation(instance, ha = observationSources?.home_assistant) {
+        if (!instance) return null;
+        if (Object.hasOwn(instance, "location_id")) return instance.location_id || null;
+        const oldLocations = new Set((ha?.measurements || [])
+          .filter((item) => item.instance_id === instance.id && item.location_id)
+          .map((item) => item.location_id));
+        const inferred = oldLocations.size === 1 ? [...oldLocations][0] : null;
+        return locations.some((location) => location.id === inferred) ? inferred : null;
+      }
+
+      function measurementPayload() {
+        const instance = observationSources?.home_assistant.instances.find(
+          (item) => item.id === $("measurementInstance").value
+        );
+        return {
+          instance_id: $("measurementInstance").value,
+          location_id: editingMeasurementRecord?.location_id || instanceLocation(instance),
+          entity_id: $("measurementEntity").value.trim(),
+          scope: $("measurementScope").value,
+          name: $("measurementName").value.trim(),
+        };
+      }
+
+      function updateMeasurementLocation() {
+        const payload = measurementPayload();
+        const instance = observationSources?.home_assistant.instances.find((item) => item.id === payload.instance_id);
+        const pairedLocation = instanceLocation(instance);
+        const retained = editingMeasurementRecord?.location_id;
+        const mismatch = retained && pairedLocation && retained !== pairedLocation;
+        const unchangedLegacyPair = !!instance && retained &&
+          editingMeasurementRecord.instance_id === payload.instance_id &&
+          locations.some((location) => location.id === retained);
+        const locationText = retained
+          ? `Location: ${locationName(retained)} — existing measurement location retained.` +
+            (mismatch ? " This instance is paired elsewhere. Choose an instance paired to this original location before saving or testing."
+              : !pairedLocation
+                ? unchangedLegacyPair
+                  ? " This legacy record keeps its original instance and location. Pair the instance before adding new measurements."
+                  : " Pair the selected instance before saving or testing; the original location is unchanged."
+                : "")
+          : pairedLocation
+            ? `Location: ${locationName(pairedLocation)} — inherited from the instance.`
+            : "Location: not paired. Edit the instance and choose a location before adding a measurement. For read-only instances, update the environment configuration.";
+        if ($("measurementLocation").textContent !== locationText) {
+          $("measurementLocation").textContent = locationText;
+        }
+        $("measurementSubmit").disabled = !payload.instance_id || (!pairedLocation && !unchangedLegacyPair) || !!mismatch;
+        $("measurementTest").disabled = !payload.instance_id || !payload.location_id ||
+          !!mismatch || (!pairedLocation && !unchangedLegacyPair);
+      }
+
+      function invalidateMeasurementTest() {
+        measurementTestRequest++;
+        $("measurementTestStatus").textContent = "";
+        updateMeasurementLocation();
+      }
+
+      function diagnosticTime(value) {
+        const date = value ? new Date(value) : null;
+        return date && Number.isFinite(date.getTime())
+          ? date.toISOString().replace("T", " ").replace(".000Z", " UTC")
+          : "timestamp unavailable";
+      }
+
+      async function testMeasurement(payload, status, trigger, isCurrent = () => status.isConnected) {
+        trigger.disabled = true;
+        status.textContent = "Testing current Home Assistant state…";
+        try {
+          const result = await api("/api/observation-sources/home-assistant/measurements/test", {
+            method: "POST", body: JSON.stringify(payload),
+          });
+          if (!isCurrent()) return;
+          const timestamp = result.last_updated || result.last_changed;
+          const validTime = timestamp && Number.isFinite(new Date(timestamp).getTime());
+          status.textContent = result.usable === true && typeof result.value === "number" && Number.isFinite(result.value) && validTime
+            ? `Current state: ${result.value} °C · ${diagnosticTime(timestamp)}`
+            : measurementUsabilityReason(result.usable === true && !validTime ? "invalid_timestamp" : result.reason);
+        } catch (error) {
+          if (isCurrent()) status.textContent = diagnosticFailure(error, false);
+        } finally {
+          if (isCurrent()) trigger.disabled = false;
+        }
+      }
+
+      function measurementUsabilityReason(reason) {
+        const reasons = {
+          invalid_state: "The entity is unavailable or has no usable state yet.",
+          not_sensor: "This entity is not a sensor.",
+          not_temperature: "This entity is not a temperature sensor.",
+          not_celsius: "The temperature sensor must report Celsius (°C).",
+          not_numeric: "The entity does not currently report a numeric temperature.",
+          entity_not_found: "The entity was not found. Check its ID or search again.",
+          invalid_timestamp: "The entity has no usable observation timestamp.",
+        };
+        return typeof reason === "string" && Object.hasOwn(reasons, reason)
+          ? reasons[reason]
+          : "No usable Celsius temperature is available. Check the entity state and temperature unit.";
+      }
+
+      function diagnosticFailure(error, history) {
+        // Never echo upstream error bodies, URLs or tokens into diagnostics.
+        const code = String(error?.message || "").match(/^(\d{3}):/)?.[1];
+        if (code === "401") return "API access is required. Enter the API key in General settings, then retry.";
+        if (code === "404") return "The instance or location could not be found. Reload the configuration and check the saved measurement.";
+        if (code === "409") return "The location pairing is not usable. Check the instance location; existing measurement locations are retained.";
+        if (code === "422") return "The measurement configuration is invalid. Check the entity ID and instance location.";
+        if (code === "504") return "Home Assistant did not respond in time. Retry when the instance is available.";
+        return history
+          ? "History unavailable. Check the instance connection and recorder access, then retry."
+          : "No usable Celsius temperature could be read. Check the entity state, temperature unit, instance URL and token, then retry.";
+      }
+
+      function measurementHistory(payload) {
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.textContent = "Last 24 hours · HA recorder";
+        summary.setAttribute("aria-label", `Last 24 hours of HA recorder history for ${payload.entity_id}`);
+        const status = document.createElement("p");
+        status.className = "muted";
+        status.setAttribute("role", "status");
+        status.textContent = "Open to load the rolling last 24 hours from Home Assistant recorder. Times are UTC; missing or unavailable periods are not filled.";
+        const list = document.createElement("ol");
+        list.className = "ha-history-list";
+        list.setAttribute("aria-label", `${payload.entity_id} recorder temperatures`);
+        let loaded = false;
+        let loading = false;
+        let request = 0;
+        const refresh = button("Refresh history", load);
+        refresh.setAttribute("aria-label", `Refresh recorder history for ${payload.entity_id}`);
+        async function load() {
+          if (loading) return;
+          const current = ++request;
+          loading = true;
+          refresh.disabled = true;
+          list.textContent = "";
+          list.setAttribute("aria-busy", "true");
+          status.textContent = "Loading the last 24 hours from Home Assistant recorder…";
+          try {
+            const result = await api("/api/observation-sources/home-assistant/measurements/history", {
+              method: "POST", body: JSON.stringify(payload),
+            });
+            if (!details.isConnected || current !== request) return;
+            if (!Array.isArray(result.samples)) throw new Error("Invalid history response");
+            const start = new Date(result.start).getTime();
+            const end = new Date(result.end).getTime();
+            if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+              throw new Error("Invalid history window");
+            }
+            const samples = result.samples.filter((sample) =>
+              !sample.carried &&
+              typeof sample.value === "number" && Number.isFinite(sample.value) &&
+              sample.timestamp && Number.isFinite(new Date(sample.timestamp).getTime()) &&
+              new Date(sample.timestamp).getTime() >= start &&
+              new Date(sample.timestamp).getTime() <= end
+            );
+            const gaps = (Array.isArray(result.gaps) ? result.gaps : []).filter((gap) =>
+              gap.timestamp && Number.isFinite(new Date(gap.timestamp).getTime()) &&
+              new Date(gap.timestamp).getTime() >= start &&
+              new Date(gap.timestamp).getTime() <= end
+            );
+            const entries = samples.map((sample) => ({ ...sample, gap: false }))
+              .concat(gaps.map((gap) => ({ timestamp: gap.timestamp, gap: true })))
+              .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+            entries.forEach((entry) => {
+              const item = document.createElement("li");
+              const time = document.createElement("time");
+              time.dateTime = new Date(entry.timestamp).toISOString();
+              time.textContent = diagnosticTime(entry.timestamp);
+              item.append(time, document.createTextNode(entry.gap
+                ? " · Gap — unavailable or unusable state; no value inferred."
+                : ` · ${entry.value} °C`));
+              list.appendChild(item);
+            });
+            loaded = true;
+            status.textContent = samples.length
+                ? `${samples.length} recorded values · UTC. From HA recorder, not the forecast archive. Missing or unavailable periods remain gaps.`
+                : "No usable Celsius values recorded in the last 24 hours.";
+            if (gaps.length) status.textContent += ` ${gaps.length} recorded gap(s) shown.`;
+            refresh.textContent = "Refresh history";
+          } catch (error) {
+            if (!details.isConnected || current !== request) return;
+            status.textContent = diagnosticFailure(error, true);
+            refresh.textContent = "Retry history";
+          } finally {
+            loading = false;
+            if (details.isConnected && current === request) {
+              refresh.disabled = false;
+              list.setAttribute("aria-busy", "false");
+            }
+          }
+        }
+        details.append(summary, status, refresh, list);
+        details.addEventListener("toggle", () => {
+          if (details.open && !loaded && !loading) load();
+        });
+        return details;
+      }
+
+      $("measurementTest").addEventListener("click", () => {
+        if (!$("measurementForm").reportValidity()) return;
+        updateMeasurementLocation();
+        if ($("measurementTest").disabled) return;
+        const request = ++measurementTestRequest;
+        testMeasurement(measurementPayload(), $("measurementTestStatus"), $("measurementTest"),
+          () => request === measurementTestRequest);
+      });
+      ["measurementScope", "measurementName"].forEach((id) => {
+        $(id).addEventListener("input", invalidateMeasurementTest);
       });
 
       function locationName(locationId) {
@@ -1155,6 +1399,10 @@
           const row = document.createElement("tr");
           cell(row, instance.name);
           cell(row, instance.id);
+          const pairedLocation = instanceLocation(instance, ha);
+          cell(row, pairedLocation
+            ? `${locationName(pairedLocation)}${instance.location_id ? "" : " (inferred from legacy measurements)"}`
+            : "Not paired — choose a location");
           cell(row, instance.url);
           cell(row, instance.token_set ? "set" : "missing");
           cell(row, OBS_ORIGINS[instance.origin]);
@@ -1190,7 +1438,7 @@
         if (!ha.instances.length) {
           const row = document.createElement("tr");
           const td = cell(row, "No Home Assistant instance yet – add one below.");
-          td.colSpan = 7;
+          td.colSpan = 8;
           body.appendChild(row);
         }
         const measurements = ha.measurements.length;
@@ -1214,6 +1462,8 @@
           }
           clearEntityDiscovery("Search again to find entities on this instance.");
         }
+        updateMeasurementLocation();
+        invalidateMeasurementTest();
       }
 
       function renderMeasurements(ha) {
@@ -1229,9 +1479,23 @@
           cell(row, measurement.scope);
           cell(row, OBS_ORIGINS[measurement.origin]);
           const actions = document.createElement("td");
+          actions.className = "ha-diagnostics";
+          const box = document.createElement("div");
+          box.className = "bar";
+          const diagnosticStatus = document.createElement("p");
+          diagnosticStatus.className = "muted";
+          diagnosticStatus.setAttribute("role", "status");
+          const payload = {
+            instance_id: measurement.instance_id,
+            location_id: measurement.location_id,
+            entity_id: measurement.entity_id,
+            scope: measurement.scope,
+            name: measurement.name || "",
+          };
+          const testButton = button("Test", () => testMeasurement(payload, diagnosticStatus, testButton));
+          testButton.setAttribute("aria-label", `Test ${measurement.name || measurement.entity_id}`);
+          box.appendChild(testButton);
           if (measurement.origin === "ui") {
-            const box = document.createElement("div");
-            box.className = "bar";
             box.append(
               button("Edit", () => startMeasurementEdit(measurement)),
               button("Delete", async () => {
@@ -1246,10 +1510,13 @@
                 } catch (error) { setStatus(error.message); }
               })
             );
-            actions.appendChild(box);
           } else {
-            actions.textContent = "read only";
+            const readOnly = document.createElement("span");
+            readOnly.className = "muted";
+            readOnly.textContent = "read only";
+            box.appendChild(readOnly);
           }
+          actions.append(box, diagnosticStatus, measurementHistory(payload));
           row.appendChild(actions);
           body.appendChild(row);
         });
@@ -1376,9 +1643,20 @@
         } catch (error) { setStatus(error.message); }
       }
 
+      function updateInstanceLocationMode() {
+        const keepLegacy = !!editingInstanceRecord && !instanceLocation(editingInstanceRecord);
+        $("haLocation").required = !keepLegacy;
+        const blank = Array.from($("haLocation").options).find((option) => option.value === "");
+        if (blank) blank.textContent = keepLegacy ? "Keep legacy / unpaired locations" : "Choose a location";
+        $("haInstanceLocationHelp").hidden = !keepLegacy;
+      }
+
       function resetInstanceForm() {
         editingInstance = null;
+        editingInstanceRecord = null;
         $("haInstanceForm").reset();
+        $("haLocation").value = "";
+        updateInstanceLocationMode();
         $("haToken").placeholder = "token";
         $("haInstanceSubmit").textContent = "Add instance";
         $("haInstanceCancel").hidden = true;
@@ -1386,7 +1664,10 @@
 
       function startInstanceEdit(instance) {
         editingInstance = instance.id;
+        editingInstanceRecord = { ...instance };
         $("haName").value = instance.name;
+        $("haLocation").value = instanceLocation(instance) || "";
+        updateInstanceLocationMode();
         $("haUrl").value = instance.url || "";
         $("haToken").value = "";
         $("haToken").placeholder = instance.token_set ? "keep current token" : "token";
@@ -1398,11 +1679,15 @@
       $("haInstanceCancel").addEventListener("click", resetInstanceForm);
       $("haInstanceForm").addEventListener("submit", async (event) => {
         event.preventDefault();
+        if (!$("haInstanceForm").reportValidity()) return;
+        const submittedInstance = editingInstance;
+        const submittedLocation = $("haLocation").value;
         const payload = {
           name: $("haName").value.trim(),
           url: $("haUrl").value.trim() || null,
           token: $("haToken").value.trim() || null,
         };
+        if (submittedLocation) payload.location_id = submittedLocation;
         try {
           const path = editingInstance
             ? `/api/observation-sources/home-assistant/instances/${encodeURIComponent(editingInstance)}`
@@ -1412,46 +1697,50 @@
             body: JSON.stringify(payload),
           }));
           clearEntityDiscovery("Search again after changing the Home Assistant instance.");
-          setStatus(`Home Assistant instance ${payload.name} ${editingInstance ? "saved" : "added"}.`);
-          resetInstanceForm();
+          setStatus(`Home Assistant instance ${payload.name} ${submittedInstance ? "saved" : "added"}.`);
+          if (editingInstance === submittedInstance &&
+              $("haName").value.trim() === payload.name &&
+              $("haLocation").value === submittedLocation &&
+              ($("haUrl").value.trim() || null) === payload.url &&
+              ($("haToken").value.trim() || null) === payload.token) resetInstanceForm();
         } catch (error) { setStatus(error.message); }
       });
 
       function resetMeasurementForm() {
         editingMeasurement = null;
+        editingMeasurementRecord = null;
         selectedDiscoveredMeasurement = null;
         const instance = $("measurementInstance").value;
         $("measurementForm").reset();
         if (instance) $("measurementInstance").value = instance;
-        $("measurementLocation").value = $("location").value;
         $("measurementSubmit").textContent = "Add measurement";
         $("measurementCancel").hidden = true;
         clearEntityDiscovery("Choose an instance and search for an entity.");
+        invalidateMeasurementTest();
       }
 
       function startMeasurementEdit(measurement) {
         editingMeasurement = measurement.id;
+        editingMeasurementRecord = { ...measurement };
         $("measurementInstance").value = measurement.instance_id;
-        $("measurementLocation").value = measurement.location_id;
         $("measurementEntity").value = measurement.entity_id;
         $("measurementScope").value = measurement.scope;
         $("measurementName").value = measurement.name || "";
         $("measurementSubmit").textContent = "Save measurement";
         $("measurementCancel").hidden = false;
         selectedDiscoveredMeasurement = null;
+        clearEntityDiscovery("Search again to find entities on this instance.");
+        invalidateMeasurementTest();
         $("measurementEntity").focus();
       }
 
       $("measurementCancel").addEventListener("click", resetMeasurementForm);
       $("measurementForm").addEventListener("submit", async (event) => {
         event.preventDefault();
-        const payload = {
-          instance_id: $("measurementInstance").value,
-          location_id: $("measurementLocation").value,
-          entity_id: $("measurementEntity").value.trim(),
-          scope: $("measurementScope").value,
-          name: $("measurementName").value.trim(),
-        };
+        updateMeasurementLocation();
+        if ($("measurementSubmit").disabled) return;
+        const payload = measurementPayload();
+        const submittedMeasurement = editingMeasurement;
         if (!payload.instance_id) { setStatus("Please add a Home Assistant instance first."); return; }
         try {
           const path = editingMeasurement
@@ -1461,8 +1750,9 @@
             method: editingMeasurement ? "PUT" : "POST",
             body: JSON.stringify(payload),
           }));
-          setStatus(`Measurement ${payload.entity_id} ${editingMeasurement ? "saved" : "added"}.`);
-          resetMeasurementForm();
+          setStatus(`Measurement ${payload.entity_id} ${submittedMeasurement ? "saved" : "added"}.`);
+          if (editingMeasurement === submittedMeasurement &&
+              JSON.stringify(measurementPayload()) === JSON.stringify(payload)) resetMeasurementForm();
         } catch (error) { setStatus(error.message); }
       });
 
@@ -1593,7 +1883,8 @@
         locations = items;
         const options = items.map((location) => [location.id, location.name]);
         fillSelect(select, options);
-        fillSelect($("measurementLocation"), options);
+        fillSelect($("haLocation"), [["", "Choose a location"], ...options]);
+        updateInstanceLocationMode();
         fillSelect($("esMeasurementLocation"), options);
         if (preferred && items.some((item) => item.id === preferred)) select.value = preferred;
         renderLocations();
@@ -1872,7 +2163,7 @@
       async function locationChanged() {
         closeExplanation();
         if (observationSources) renderObservationSources(observationSources);
-        if (!editingMeasurement) $("measurementLocation").value = $("location").value;
+        updateMeasurementLocation();
         if (!editingEsMeasurement) $("esMeasurementLocation").value = $("location").value;
         await load(false);
         if ($("sourceComparisonSection").open) loadSourceComparison();
@@ -1923,9 +2214,9 @@
           locations = items;
           const options = items.map((location) => [location.id, location.name]);
           fillSelect($("location"), options);
-          fillSelect($("measurementLocation"), options);
+          fillSelect($("haLocation"), [["", "Choose a location"], ...options]);
+          updateInstanceLocationMode();
           fillSelect($("esMeasurementLocation"), options);
-          $("measurementLocation").value = $("location").value;
           $("esMeasurementLocation").value = $("location").value;
           renderLocations();
           await loadSources();
@@ -1934,7 +2225,10 @@
         } catch (error) { setStatus(error.message); }
       }
 
-      $("reload").addEventListener("click", () => load(false));
+      $("reload").addEventListener("click", async () => {
+        await loadObservationSources();
+        await load(false);
+      });
       $("refresh").addEventListener("click", () => load(true));
       $("location").addEventListener("change", locationChanged);
       $("verify").addEventListener("click", async () => {

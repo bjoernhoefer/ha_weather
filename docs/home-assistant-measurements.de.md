@@ -6,21 +6,79 @@ Beobachtungsquelle für einen Standort verwenden.
 ## Instanz hinzufügen und Sensor finden
 
 1. Öffne **Real world measurements → Home Assistant instances**.
-2. Trage die Home-Assistant-URL und einen Long-Lived Access Token ein und
+2. Wähle unter **Location** den Standort der Instanz, trage die Home-Assistant-URL und einen Long-Lived Access Token ein und
    speichere die Instanz. Der Token wird auf dem ha_weather-Server gespeichert
    und danach nicht mehr angezeigt.
-3. Wähle unter **Measurements** die Instanz und den Standort aus.
+3. Wähle unter **Measurements** die Instanz aus. Ihr zugeordneter Standort wird
+   übernommen; eine zweite Standortauswahl entfällt.
 4. Suche nach einem Teil des Anzeigenamens oder der Entity-ID, zum Beispiel
    `Garten`, und wähle einen aktivierten Treffer aus.
-5. Prüfe Standort und den Bereich **outdoor** und speichere die Messung.
+5. Prüfe den übernommenen Standort und den Bereich **outdoor**, verwende optional
+   **Test** und speichere die Messung.
 
 Die Suche prüft aktuell verfügbare Zustands-Entities in Home Assistant. Sie
 zeigt keine deaktivierten oder anderweitig nicht geladenen Einträge aus der
 Entity Registry. Passende Nicht-Temperatur-Entities werden angezeigt, können
 aber nicht ausgewählt werden. Aktivierbar sind nur `sensor`-Entities mit der
 Geräteklasse Temperatur, einem numerischen aktuellen Zustand und einer
-Celsius-Einheit (`°C` oder `C`). Der aktuelle Zustand dient nur zur Auswahl;
+Celsius-Einheit (`°C` oder `C`). Bei der Entity-Suche dient der aktuelle Zustand zur Auswahl;
 die aufgezeichnete Historie liefert die täglichen Beobachtungen.
+
+## Testen und letzte Werte ansehen
+
+Mit **Test** im Messungsformular vor dem Speichern oder neben einer vorhandenen
+Messung wird der aktuelle Zustand aus Home Assistant abgerufen. Nutzbar ist ein
+endlicher numerischer `sensor`-Wert mit Geräteklasse Temperatur und Celsius-Einheit
+(`°C` oder `C`). Das Ergebnis zeigt Wert und verfügbaren Zeitstempel; nicht
+verfügbare, ungültige oder nicht unterstützte Werte gelten nicht als nutzbare
+Temperaturen. Verbindungs-, Authentifizierungs- und Zeitüberschreitungsfehler
+werden ohne gespeicherte Zugangsdaten angezeigt. Der Test speichert keine
+Einstellungen und verändert keine Provider-Bewertung.
+
+Klappe **Last 24 hours · HA recorder** neben einer Messung auf, um die gleitenden letzten **24 Stunden**
+aus dem Home-Assistant-Recorder abzurufen. Der Abschnitt ist anfangs zugeklappt
+und lädt erst beim Öffnen; über die Aktualisierung werden neuere Daten angefragt.
+Werte enthalten Zeitstempel; fehlende oder unbrauchbare Aufzeichnungen werden
+nicht erfunden. Dies ist die Recorder-Historie der Quelle, **kein Protokoll der
+bereits an ha_weather gelieferten Werte**. Der Recorder muss die Entity
+aufzeichnen und Daten für den angefragten Zeitraum aufbewahren; ein erfolgreicher Test des aktuellen Zustands garantiert keine
+Historie. Ein leeres Ergebnis kann daher korrekt sein.
+Zeitlich markierte Lücken kennzeichnen unbrauchbare aufgezeichnete Zustände,
+keine fehlgeschlagenen Lieferungen. Zustände vor dem Zeitfenster entfallen;
+Lücken werden nicht interpoliert.
+Diese Sensorhistorie ist von den allgemeinen Dashboard-Abschnitten **History**
+und **Hourly source comparison** getrennt.
+
+Abschnittsüberschriften bleiben ohne Dreiecksmarker anklickbar und per Enter oder
+Leertaste auf- und zuklappbar.
+
+## Bestehende Konfigurationen
+
+Bestehende Messungen behalten ihre Standorte. Eine bisherige Instanz mit
+Messungen an genau einem gültigen Standort kann diesen automatisch anzeigen.
+Eine Instanz mit mehreren Standorten bleibt im Legacy-Modus, statt ihre Sensoren
+unbemerkt zu verschieben. Löse widersprüchliche Zuordnungen vor einer
+Standortkopplung auf; andernfalls wird die Änderung abgelehnt. Für das
+Ändern von Name, URL oder Token einer Legacy-Instanz ist keine Standortkopplung
+erforderlich. Für das vereinfachte Formular zum Hinzufügen von Messungen muss die Instanz zuerst einem
+Standort zugeordnet sein. Umgebungsverwaltete Instanzen bleiben im UI
+schreibgeschützt. Für eine benannte Umgebungsinstanz wird `location_id` in
+`HAW_HOME_ASSISTANT_INSTANCES` gesetzt. Die implizite Instanz `environment` aus
+den URL-/Token-Variablen verwendet weiterhin ihre bisherigen Standortzuordnungen.
+Vorhandene Messungen mit mehreren Standorten bleiben ohne Kopplung nutzbar.
+Verwalte solche Legacy-Zuordnungen über die API mit explizitem Standort oder
+konfiguriere getrennte benannte Instanzen für den vereinfachten UI-Ablauf.
+Widerspricht eine explizite Umgebungskopplung den konfigurierten oder
+gespeicherten Messungsstandorten, startet der Dienst erst nach Korrektur;
+Sensoren werden nicht unbemerkt neu zugeordnet.
+
+Ältere API-Clients dürfen für nicht gekoppelte Instanzen weiterhin einen
+Messungsstandort übergeben. Bei gekoppelten Instanzen entfällt er oder muss dem
+Instanzstandort entsprechen; ein abweichender Standort wird abgelehnt. Eine
+Änderung der Kopplung darf weder bestehende Messungen unbemerkt verschieben noch
+archivierte Beobachtungen neu zuordnen.
+Ein gekoppelter Standort kann nicht gelöscht werden, solange eine Instanz auf
+ihn verweist. Entferne zuerst die Instanz oder löse ihre Kopplung auf.
 
 ## Stündliche Quellen vergleichen
 

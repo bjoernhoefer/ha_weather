@@ -165,6 +165,15 @@ class Storage:
         with self._lock:
             self._connection.executescript(SCHEMA)
             self._migrate_observations_scope()
+            columns = {
+                row["name"]
+                for row in self._connection.execute("PRAGMA table_info(ha_instances)")
+            }
+            self.ha_pairing_migration_pending = "location_id" not in columns
+            if self.ha_pairing_migration_pending:
+                self._connection.execute(
+                    "ALTER TABLE ha_instances ADD COLUMN location_id TEXT"
+                )
             self._connection.commit()
 
     def _migrate_observations_scope(self) -> None:
@@ -562,7 +571,8 @@ class Storage:
             rows = list(self._connection.execute("SELECT * FROM ha_instances ORDER BY name, id"))
         return [
             HomeAssistantInstance(
-                id=row["id"], name=row["name"], url=row["url"], token=row["token"]
+                id=row["id"], name=row["name"], url=row["url"], token=row["token"],
+                location_id=row["location_id"],
             )
             for row in rows
         ]
@@ -571,11 +581,13 @@ class Storage:
         with self._lock:
             self._connection.execute(
                 """
-                INSERT INTO ha_instances (id, name, url, token) VALUES (?, ?, ?, ?)
+                INSERT INTO ha_instances (id, name, url, token, location_id)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT (id) DO UPDATE SET name=excluded.name,
-                    url=excluded.url, token=excluded.token
+                    url=excluded.url, token=excluded.token,
+                    location_id=excluded.location_id
                 """,
-                (instance.id, instance.name, instance.url, instance.token),
+                (instance.id, instance.name, instance.url, instance.token, instance.location_id),
             )
             self._connection.commit()
 
@@ -590,6 +602,31 @@ class Storage:
             )
             self._connection.commit()
         return cursor.rowcount > 0
+
+    def ha_instance_has_history(self, instance_id: str, location_id: str) -> bool:
+        """Daily legacy aggregates cannot be attributed to an individual instance."""
+        with self._lock:
+            return bool(
+                self._connection.execute(
+                    "SELECT 1 FROM hourly_measurements WHERE instance_id = ? LIMIT 1",
+                    (instance_id,),
+                ).fetchone()
+                or self._connection.execute(
+                    """SELECT 1 FROM observations WHERE location_id = ?
+                    AND source LIKE '%home_assistant%' LIMIT 1""",
+                    (location_id,),
+                ).fetchone()
+            )
+
+    def ha_instance_history_locations(self, instance_id: str) -> set[str]:
+        with self._lock:
+            return {
+                row["location_id"]
+                for row in self._connection.execute(
+                    "SELECT DISTINCT location_id FROM hourly_measurements WHERE instance_id = ?",
+                    (instance_id,),
+                )
+            }
 
     def measurements(self) -> List[Measurement]:
         with self._lock:

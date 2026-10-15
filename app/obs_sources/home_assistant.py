@@ -28,7 +28,15 @@ from ..config import (
     Measurement,
     Settings,
 )
-from ..models import HomeAssistantEntityInfo, HourlyMeasurement, Observation
+from ..models import (
+    HomeAssistantEntityInfo,
+    HomeAssistantHistoryGap,
+    HomeAssistantHistorySample,
+    HomeAssistantMeasurementHistory,
+    HomeAssistantMeasurementTest,
+    HourlyMeasurement,
+    Observation,
+)
 from .base import ObservationSource, register
 
 LOGGER = logging.getLogger(__name__)
@@ -47,7 +55,7 @@ def _resolve_timezone(timezone_name: str) -> ZoneInfo:
 def _as_float(value: object) -> Optional[float]:
     try:
         result = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return result if math.isfinite(result) else None
 
@@ -180,6 +188,19 @@ def effective_measurements(settings: Settings) -> List[Measurement]:
                     )
                 )
     measurements.extend(settings.home_assistant_measurements)
+    instances = effective_instances(settings)
+    for measurement in measurements:
+        instance = instances.get(measurement.instance_id)
+        if (
+            instance is not None
+            and instance.location_id is not None
+            and measurement.location_id != instance.location_id
+        ):
+            # Settings copies also include SQLite records; reject conflicts
+            # rather than routing a paired installation's sensor elsewhere.
+            raise ValueError(
+                "Home Assistant measurement location conflicts with explicitly paired instance"
+            )
     return measurements
 
 
@@ -206,6 +227,147 @@ def validate_discovery_url(instance: HomeAssistantInstance) -> str:
     ):
         raise ValueError("invalid Home Assistant URL")
     return value.rstrip("/")
+
+
+def _state_timestamp(value: object) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("invalid Home Assistant timestamp")
+    stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if stamp.tzinfo is None:
+        raise ValueError("invalid Home Assistant timestamp")
+    return stamp.astimezone(timezone.utc)
+
+
+class UnusableTemperatureError(ValueError):
+    """Fixed, safe usability code; never contains an upstream state or error."""
+
+
+def _temperature_state(item: object, entity_id: str) -> float:
+    if not isinstance(item, dict) or item.get("entity_id") != entity_id:
+        raise UnusableTemperatureError("invalid_state")
+    if not entity_id.startswith("sensor."):
+        raise UnusableTemperatureError("not_sensor")
+    attributes = item.get("attributes")
+    if not isinstance(attributes, dict):
+        raise UnusableTemperatureError("invalid_state")
+    if attributes.get("device_class") != "temperature":
+        raise UnusableTemperatureError("not_temperature")
+    if attributes.get("unit_of_measurement") not in ("°C", "C"):
+        raise UnusableTemperatureError("not_celsius")
+    value = _as_float(item.get("state"))
+    if isinstance(item.get("state"), bool) or value is None:
+        raise UnusableTemperatureError("not_numeric")
+    return value
+
+
+async def read_measurement(
+    client: httpx.AsyncClient,
+    instance: HomeAssistantInstance,
+    measurement: Measurement,
+) -> HomeAssistantMeasurementTest:
+    """Read one live state without storing it or exposing upstream diagnostics."""
+    base_url = validate_discovery_url(instance)
+    if not instance.token:
+        raise ValueError("Home Assistant instance is not configured")
+    response = await client.get(
+        f"{base_url}/api/states/{quote(measurement.entity_id, safe='')}",
+        headers={"Authorization": f"{AUTH_SCHEME} {instance.token}"},
+        follow_redirects=False,
+    )
+    result = HomeAssistantMeasurementTest(
+        instance_id=instance.id,
+        location_id=measurement.location_id,
+        entity_id=measurement.entity_id,
+    )
+    if response.status_code == 404:
+        return result.model_copy(update={"usable": False, "reason": "entity_not_found"})
+    response.raise_for_status()
+    try:
+        item = response.json()
+    except ValueError:
+        return result.model_copy(update={"usable": False, "reason": "invalid_state"})
+    try:
+        value = _temperature_state(item, measurement.entity_id)
+    except UnusableTemperatureError as exc:
+        return result.model_copy(update={"usable": False, "reason": str(exc)})
+    try:
+        changed = _state_timestamp(item.get("last_changed"))
+        updated = _state_timestamp(item.get("last_updated"))
+        if changed > updated or updated > now_utc():
+            raise ValueError("invalid timestamp order")
+    except (ValueError, TypeError, OverflowError):
+        return result.model_copy(update={"usable": False, "reason": "invalid_timestamp"})
+    return result.model_copy(update={
+        "value": value, "last_changed": changed, "last_updated": updated,
+    })
+
+
+async def read_measurement_history(
+    client: httpx.AsyncClient,
+    instance: HomeAssistantInstance,
+    measurement: Measurement,
+) -> HomeAssistantMeasurementHistory:
+    """Read the last 24 elapsed hours from HA recorder (not local polling).
+
+    Full history responses retain each state's attributes so a historical
+    Fahrenheit/unknown state cannot be mistaken for a Celsius sample.
+    Pre-window initial states are omitted, not clamped to invented boundary events.
+    """
+    base_url = validate_discovery_url(instance)
+    if not instance.token:
+        raise ValueError("Home Assistant instance is not configured")
+    end = now_utc()
+    start = end - timedelta(hours=24)
+    response = await client.get(
+        f"{base_url}/api/history/period/{quote(start.isoformat(), safe='')}",
+        params={
+            "filter_entity_id": measurement.entity_id,
+            "end_time": end.isoformat(),
+            "significant_changes_only": "false",
+        },
+        headers={"Authorization": f"{AUTH_SCHEME} {instance.token}"},
+        follow_redirects=False,
+    )
+    response.raise_for_status()
+    history = response.json()
+    if (
+        not isinstance(history, list)
+        or any(not isinstance(series, list) for series in history)
+        or sum(len(series) for series in history) > 10000
+    ):
+        raise ValueError("invalid or excessive Home Assistant history")
+    samples: List[HomeAssistantHistorySample] = []
+    gaps: List[HomeAssistantHistoryGap] = []
+    for series in history:
+        for item in series:
+            if not isinstance(item, dict) or item.get("entity_id") != measurement.entity_id:
+                continue
+            try:
+                stamp = _state_timestamp(item.get("last_updated"))
+            except (ValueError, TypeError, OverflowError):
+                continue
+            if stamp < start or stamp > end:
+                continue
+            try:
+                value = _temperature_state(item, measurement.entity_id)
+            except (ValueError, TypeError, OverflowError):
+                gaps.append(HomeAssistantHistoryGap(timestamp=stamp))
+                continue
+            sample = HomeAssistantHistorySample(
+                timestamp=stamp, value=value
+            )
+            samples.append(sample)
+    samples.sort(key=lambda sample: sample.timestamp)
+    gaps.sort(key=lambda gap: gap.timestamp)
+    return HomeAssistantMeasurementHistory(
+        instance_id=instance.id,
+        location_id=measurement.location_id,
+        entity_id=measurement.entity_id,
+        start=start,
+        end=end,
+        samples=samples,
+        gaps=gaps,
+    )
 
 
 async def discover_entities(

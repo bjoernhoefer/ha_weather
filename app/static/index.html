@@ -118,7 +118,33 @@
       .ha-diagnostics p { margin: .5rem 0; }
       .ha-diagnostics details { margin-top: .65rem; padding: .6rem; border: 1px solid var(--border); border-radius: .65rem; }
       .ha-diagnostics summary { font-weight: 650; }
-      .ha-history-list { max-height: 15rem; overflow-y: auto; padding-left: 1.3rem; font-size: .82rem; }
+      .ha-measurements { display: table; table-layout: fixed; white-space: normal; overflow: visible; }
+      .ha-measurements > thead th:last-child { width: 28%; }
+      .ha-measurements > tbody > tr > td { vertical-align: top; overflow-wrap: anywhere; padding: .5rem; }
+      .ha-measurements .ha-diagnostics { min-width: 0; max-width: none; }
+      .ha-measurements .ha-diagnostics .bar { flex-wrap: wrap; gap: .35rem; }
+      .ha-measurements .ha-diagnostics p:empty { display: none; }
+      .ha-measurements .ha-history-cell { padding: 0 .5rem .75rem; }
+      .ha-history { padding: .65rem; border: 1px solid var(--border); border-radius: .65rem; background: var(--surface-soft); }
+      .ha-history > summary { font-size: .85rem; font-weight: 650; }
+      .ha-history > summary::before { content: "▸ "; }
+      .ha-history[open] > summary::before { content: "▾ "; }
+      .ha-history p { margin: .65rem 0; }
+      .ha-history-controls { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: .65rem; }
+      .ha-history-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; align-items: start; }
+      .ha-history-grid > * { min-width: 0; }
+      .ha-history-table-wrap { max-height: 20rem; overflow: auto; }
+      .ha-history-table { display: table; table-layout: fixed; white-space: normal; overflow: visible; }
+      .ha-history-table caption { text-align: left; font-size: .82rem; font-weight: 650; padding: .4rem; }
+      .ha-history-table th, .ha-history-table td { padding: .45rem; overflow-wrap: anywhere; }
+      .ha-history-table th { position: sticky; top: 0; }
+      .ha-history-table time { font-variant-numeric: tabular-nums; }
+      .ha-history-chart { margin: 0; }
+      .ha-history-chart svg { display: block; width: 100%; height: auto; color: var(--muted); }
+      .ha-history-chart .history-gridline { stroke: var(--border); }
+      .ha-history-chart .history-line { fill: none; stroke: var(--accent); stroke-width: 2; }
+      .ha-history-chart .history-point { fill: var(--accent); }
+      .ha-history-chart figcaption { font-size: .82rem; color: var(--muted); }
       button:disabled { cursor: not-allowed; opacity: .65; }
       @media (prefers-reduced-motion: reduce) { button { transition: none; } }
       #providerExplanation { margin-top: 1rem; }
@@ -161,6 +187,12 @@
         .dashboard-controls button { flex: initial; }
         .entity-discovery .entity-search-controls { grid-template-columns: minmax(0, 1fr); }
         #haInstanceForm, #measurementForm { grid-template-columns: minmax(0, 1fr); }
+        .ha-history-grid { grid-template-columns: minmax(0, 1fr); }
+        .ha-measurements > thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+        .ha-measurements > tbody > .ha-measurement-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .ha-measurement-row > td::before { content: attr(data-label); display: block; color: var(--muted); font-size: .75rem; font-weight: 650; }
+        .ha-measurement-row > td:last-child { grid-column: 1 / -1; }
+        .ha-measurements > tbody, .ha-history-row, .ha-measurements .ha-history-cell { display: block; width: 100%; }
         #measurementsSection form.bar > label { display: grid; gap: .3rem; width: 100%; min-width: 0; }
         #measurementsSection form.bar input, #measurementsSection form.bar select { width: 100%; min-width: 0; max-width: 100%; }
         details.fold { padding: 1rem; }
@@ -401,7 +433,7 @@
       <h3>Measurements</h3>
       <table>
         <thead>
-          <tr><th>Name</th><th>Entity</th><th>Location</th><th>Instance</th><th>Scope</th><th>Origin</th><th>Actions &amp; diagnostics</th></tr>
+          <tr><th scope="col">Name</th><th scope="col">Entity</th><th scope="col">Location</th><th scope="col">Instance</th><th scope="col">Scope</th><th scope="col">Origin</th><th scope="col">Actions &amp; diagnostics</th></tr>
         </thead>
         <tbody id="measurements"></tbody>
       </table>
@@ -1282,6 +1314,7 @@
 
       function measurementHistory(payload) {
         const details = document.createElement("details");
+        details.className = "ha-history";
         const summary = document.createElement("summary");
         summary.textContent = "Last 24 hours · HA recorder";
         summary.setAttribute("aria-label", `Last 24 hours of HA recorder history for ${payload.entity_id}`);
@@ -1289,19 +1322,64 @@
         status.className = "muted";
         status.setAttribute("role", "status");
         status.textContent = "Open to load the rolling last 24 hours from Home Assistant recorder. Times are UTC; missing or unavailable periods are not filled.";
-        const list = document.createElement("ol");
-        list.className = "ha-history-list";
-        list.setAttribute("aria-label", `${payload.entity_id} recorder temperatures`);
+        const grid = document.createElement("div");
+        grid.className = "ha-history-grid";
+        const tableWrap = document.createElement("div");
+        tableWrap.className = "ha-history-table-wrap";
+        tableWrap.tabIndex = 0;
+        tableWrap.setAttribute("role", "region");
+        tableWrap.setAttribute("aria-label", `${payload.entity_id} recorder temperatures`);
+        const table = document.createElement("table");
+        table.className = "ha-history-table";
+        const caption = document.createElement("caption");
+        caption.textContent = `${payload.entity_id} · recorder history, oldest first`;
+        const head = document.createElement("thead");
+        const headings = document.createElement("tr");
+        ["Datetime (UTC)", "Temperature (°C)"].forEach((label) => {
+          const th = document.createElement("th");
+          th.scope = "col";
+          th.textContent = label;
+          headings.appendChild(th);
+        });
+        head.appendChild(headings);
+        const list = document.createElement("tbody");
+        table.append(caption, head, list);
+        tableWrap.appendChild(table);
+        tableWrap.hidden = true;
+        const chart = document.createElement("figure");
+        chart.className = "ha-history-chart";
+        chart.hidden = true;
+        grid.append(tableWrap, chart);
+        let chartData = null;
         let loaded = false;
         let loading = false;
         let request = 0;
         const refresh = button("Refresh history", load);
         refresh.setAttribute("aria-label", `Refresh recorder history for ${payload.entity_id}`);
+        const trend = button("Show temperature trend", () => {
+          if (!chartData || loading || !details.isConnected) return;
+          chart.replaceChildren(measurementHistoryChart(chartData, payload.entity_id));
+          const description = document.createElement("figcaption");
+          description.textContent = "UTC · °C. Points are recorded values; lines stop at explicit gaps. No values are inferred before the first or after the last point.";
+          chart.appendChild(description);
+          chart.hidden = false;
+          trend.disabled = true;
+        });
+        trend.disabled = true;
+        const controls = document.createElement("div");
+        controls.className = "ha-history-controls";
+        controls.append(refresh, trend);
         async function load() {
           if (loading) return;
           const current = ++request;
           loading = true;
           refresh.disabled = true;
+          loaded = false;
+          chartData = null;
+          chart.replaceChildren();
+          chart.hidden = true;
+          trend.disabled = true;
+          tableWrap.hidden = true;
           list.textContent = "";
           list.setAttribute("aria-busy", "true");
           status.textContent = "Loading the last 24 hours from Home Assistant recorder…";
@@ -1317,14 +1395,14 @@
               throw new Error("Invalid history window");
             }
             const samples = result.samples.filter((sample) =>
-              !sample.carried &&
+              sample && !sample.carried &&
               typeof sample.value === "number" && Number.isFinite(sample.value) &&
               sample.timestamp && Number.isFinite(new Date(sample.timestamp).getTime()) &&
               new Date(sample.timestamp).getTime() >= start &&
               new Date(sample.timestamp).getTime() <= end
             );
             const gaps = (Array.isArray(result.gaps) ? result.gaps : []).filter((gap) =>
-              gap.timestamp && Number.isFinite(new Date(gap.timestamp).getTime()) &&
+              gap && gap.timestamp && Number.isFinite(new Date(gap.timestamp).getTime()) &&
               new Date(gap.timestamp).getTime() >= start &&
               new Date(gap.timestamp).getTime() <= end
             );
@@ -1332,15 +1410,22 @@
               .concat(gaps.map((gap) => ({ timestamp: gap.timestamp, gap: true })))
               .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
             entries.forEach((entry) => {
-              const item = document.createElement("li");
+              const item = document.createElement("tr");
+              const datetime = document.createElement("td");
+              const temperature = document.createElement("td");
               const time = document.createElement("time");
               time.dateTime = new Date(entry.timestamp).toISOString();
               time.textContent = diagnosticTime(entry.timestamp);
-              item.append(time, document.createTextNode(entry.gap
-                ? " · Gap — unavailable or unusable state; no value inferred."
-                : ` · ${entry.value} °C`));
+              datetime.appendChild(time);
+              temperature.textContent = entry.gap
+                ? "Gap — unavailable or unusable state; no value inferred."
+                : `${entry.value} °C`;
+              item.append(datetime, temperature);
               list.appendChild(item);
             });
+            tableWrap.hidden = !entries.length;
+            chartData = samples.length ? { samples, gaps, start, end } : null;
+            trend.disabled = !chartData;
             loaded = true;
             status.textContent = samples.length
                 ? `${samples.length} recorded values · UTC. From HA recorder, not the forecast archive. Missing or unavailable periods remain gaps.`
@@ -1359,11 +1444,77 @@
             }
           }
         }
-        details.append(summary, status, refresh, list);
+        details.append(summary, status, controls, grid);
         details.addEventListener("toggle", () => {
           if (details.open && !loaded && !loading) load();
         });
         return details;
+      }
+
+      function measurementHistoryChart({ samples, gaps, start, end }, entityId) {
+        const svgElement = (name, attributes = {}, text) => {
+          const element = document.createElementNS("http://www.w3.org/2000/svg", name);
+          Object.entries(attributes).forEach(([key, value]) => element.setAttribute(key, value));
+          if (text !== undefined) element.textContent = text;
+          return element;
+        };
+        const svg = svgElement("svg", {
+          viewBox: "0 0 520 280", role: "img",
+          "aria-label": `Temperature trend for ${entityId}, UTC, Celsius. Recorded values only; explicit gaps break the line.`,
+        });
+        svg.appendChild(svgElement("desc", {}, "Time-proportional axis covers the complete requested window. Each dot is a recorded value. No interpolation across explicit gaps, including gaps at the same timestamp. Exact values and gap times are in the adjacent table."));
+        const points = samples.map((sample) => ({
+          time: new Date(sample.timestamp).getTime(), value: sample.value,
+        })).sort((a, b) => a.time - b.time);
+        // Normalize first so even extreme finite values cannot overflow the scale.
+        const scale = Math.max(1, ...points.map((point) => Math.abs(point.value)));
+        const values = points.map((point) => point.value / scale);
+        let low = Math.min(...values);
+        let high = Math.max(...values);
+        const padding = high === low ? Math.max(1 / scale, Math.abs(low) * .05) : (high - low) * .1;
+        low -= padding;
+        high += padding;
+        const x = (time) => 72 + (end === start ? .5 : (time - start) / (end - start)) * 424;
+        const y = (value) => 220 - (value / scale - low) / (high - low) * 196;
+        const formatTick = (value) => Number(value.toPrecision(4)).toString();
+        for (let tick = 0; tick <= 4; tick++) {
+          const value = low + (high - low) * tick / 4;
+          const position = 220 - tick / 4 * 196;
+          svg.append(
+            svgElement("line", { x1: 72, x2: 496, y1: position, y2: position, class: "history-gridline" }),
+            svgElement("text", { x: 65, y: position + 4, "text-anchor": "end", fill: "currentColor", "font-size": 11 }, formatTick(value * scale))
+          );
+        }
+        svg.appendChild(svgElement("text", { x: 8, y: 14, fill: "currentColor", "font-size": 12 }, "°C"));
+        [[start, 72, "start"], [end, 496, "end"]].forEach(([time, position, anchor]) => {
+          const iso = new Date(time).toISOString();
+          [iso.slice(0, 10), `${iso.slice(11, 19)} UTC`].forEach((text, index) => {
+            svg.appendChild(svgElement("text", {
+              x: position, y: 242 + index * 16, "text-anchor": anchor, fill: "currentColor", "font-size": 11,
+            }, text));
+          });
+        });
+        const gapTimes = gaps.map((gap) => new Date(gap.timestamp).getTime()).sort((a, b) => a - b);
+        let gapIndex = 0;
+        let segment = [];
+        const flush = () => {
+          if (segment.length > 1) svg.appendChild(svgElement("polyline", { points: segment.join(" "), class: "history-line" }));
+          segment = [];
+        };
+        points.forEach((point, index) => {
+          if (index) {
+            const previous = points[index - 1].time;
+            while (gapIndex < gapTimes.length && gapTimes[gapIndex] < previous) gapIndex++;
+            // Inclusive endpoints deliberately isolate values sharing a gap timestamp.
+            if (gapIndex < gapTimes.length && gapTimes[gapIndex] <= point.time) flush();
+          }
+          segment.push(`${x(point.time)},${y(point.value)}`);
+        });
+        flush();
+        points.forEach((point) => {
+          svg.appendChild(svgElement("circle", { cx: x(point.time), cy: y(point.value), r: 3, class: "history-point" }));
+        });
+        return svg;
       }
 
       $("measurementTest").addEventListener("click", () => {
@@ -1513,10 +1664,12 @@
 
       function renderMeasurements(ha) {
         const body = $("measurements");
+        body.closest("table").classList.add("ha-measurements");
         body.textContent = "";
         const instanceNames = Object.fromEntries(ha.instances.map((item) => [item.id, item.name]));
         ha.measurements.forEach((measurement) => {
           const row = document.createElement("tr");
+          row.className = "ha-measurement-row";
           cell(row, measurement.name || "–");
           cell(row, measurement.entity_id);
           cell(row, locationName(measurement.location_id));
@@ -1561,9 +1714,18 @@
             readOnly.textContent = "read only";
             box.appendChild(readOnly);
           }
-          actions.append(box, diagnosticStatus, measurementHistory(payload));
+          actions.append(box, diagnosticStatus);
           row.appendChild(actions);
-          body.appendChild(row);
+          ["Name", "Entity", "Location", "Instance", "Scope", "Origin", "Actions & diagnostics"]
+            .forEach((label, index) => row.children[index].setAttribute("data-label", label));
+          const historyRow = document.createElement("tr");
+          historyRow.className = "ha-history-row";
+          const historyCell = document.createElement("td");
+          historyCell.className = "ha-history-cell";
+          historyCell.colSpan = 7;
+          historyCell.appendChild(measurementHistory(payload));
+          historyRow.appendChild(historyCell);
+          body.append(row, historyRow);
         });
         if (!ha.measurements.length) {
           const row = document.createElement("tr");

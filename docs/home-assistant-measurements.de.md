@@ -47,17 +47,32 @@ Temperaturen. Verbindungs-, Authentifizierungs- und Zeitüberschreitungsfehler
 werden ohne gespeicherte Zugangsdaten angezeigt. Der Test speichert keine
 Einstellungen und verändert keine Provider-Bewertung.
 
-Klappe **Last 24 hours · HA recorder** neben einer Messung auf, um die gleitenden letzten **24 Stunden**
-aus dem Home-Assistant-Recorder abzurufen. Der Abschnitt ist anfangs zugeklappt
-und lädt erst beim Öffnen; über die Aktualisierung werden neuere Daten angefragt.
-Werte enthalten Zeitstempel; fehlende oder unbrauchbare Aufzeichnungen werden
-nicht erfunden. Dies ist die Recorder-Historie der Quelle, **kein Protokoll der
+Klappe **Last 24 hours · HA recorder** in der durchgehenden Zeile unter den
+kompakten Metadaten und Aktionen einer Messung auf, um die gleitenden letzten
+**24 Stunden** aus dem Home-Assistant-Recorder abzurufen. Der Abschnitt ist
+anfangs zugeklappt und lädt erst beim Öffnen; **Refresh history** fragt neuere
+Daten an.
+
+Die unnummerierte Tabelle zeigt **Datetime (UTC)** und **Temperature (°C)**,
+beginnend mit dem ältesten Eintrag. Mit **Show temperature trend** erstellst du
+optional ein SVG-Diagramm lokal im Browser aus denselben geladenen
+Aufzeichnungen. Das Öffnen der Historie allein erstellt kein Diagramm und
+fragt keinen separaten Diagrammdienst an. Tabelle und Verlauf stehen auf dem
+Desktop in zwei gleich breiten Spalten und auf schmalen Bildschirmen
+untereinander. Eine Aktualisierung entfernt das bisherige Diagramm auch dann,
+wenn die neue Anfrage fehlschlägt; blende den Verlauf nach erfolgreicher
+Aktualisierung erneut ein.
+
+Fehlende oder unbrauchbare Aufzeichnungen werden nicht erfunden. Dies ist die
+Recorder-Historie der Quelle, **kein Protokoll der
 bereits an ha_weather gelieferten Werte**. Der Recorder muss die Entity
 aufzeichnen und Daten für den angefragten Zeitraum aufbewahren; ein erfolgreicher Test des aktuellen Zustands garantiert keine
 Historie. Ein leeres Ergebnis kann daher korrekt sein.
 Zeitlich markierte Lücken kennzeichnen unbrauchbare aufgezeichnete Zustände,
-keine fehlgeschlagenen Lieferungen. Zustände vor dem Zeitfenster entfallen;
-Lücken werden nicht interpoliert.
+keine fehlgeschlagenen Lieferungen. Zustände vor dem Zeitfenster entfallen,
+einschließlich endlicher Werte, die von davor weitergeführt wurden. Lücken
+bleiben in der Tabelle sichtbar und unterbrechen die Diagrammlinie; sie werden
+weder interpoliert noch durch weitergeführte Werte ersetzt.
 Diese Sensorhistorie ist von den allgemeinen Dashboard-Abschnitten **History**
 und **Hourly source comparison** getrennt.
 

@@ -45,15 +45,27 @@ invalid, or unsupported values are not treated as usable temperatures.
 Connectivity, authentication and timeout failures are reported without exposing
 saved credentials. Testing does not save settings or change provider scores.
 
-Expand **Last 24 hours · HA recorder** beside a measurement to request its rolling last **24 hours** of
-Home Assistant Recorder values. This section starts collapsed and loads only
-when opened; refresh it to request recent data again. Values include timestamps,
-and missing or unusable records are not invented. This is source Recorder
+Expand the sensor's **Last 24 hours · HA recorder** heading in the full-width row
+below a measurement's compact metadata and actions to request its rolling last **24 hours** of Home
+Assistant Recorder values. This section starts collapsed and loads only when
+opened; **Refresh history** requests recent data again.
+
+The unnumbered table lists **Datetime (UTC)** and **Temperature (°C)**, oldest
+first. Select **Show temperature trend** to create an optional SVG chart locally
+in your browser from the same loaded records; opening the history alone does
+not create a chart or request a separate chart service. The table and trend use
+two equal-width columns on desktop and stack on narrow screens. Refreshing
+clears the previous chart, including if the new request fails; show the trend
+again after a successful refresh.
+
+Missing or unusable records are not invented. This is source Recorder
 history, **not an audit of values previously delivered to ha_weather**. Recorder
 must record this entity and retain data for the requested period; a successful current-state test does not guarantee
 recorded history. An empty result can therefore be valid.
 Timestamped gaps indicate unusable recorded states, not failed deliveries.
-Pre-window states are omitted and gaps are not interpolated.
+Pre-window states are omitted, including finite values carried from before the
+window. Gaps remain visible in the table and break the chart line; they are not
+interpolated or replaced with carried values.
 This per-sensor history is separate from the dashboard's overall **History**
 and **Hourly source comparison** sections.
 
